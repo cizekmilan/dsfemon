@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <string.h>
 #include <unistd.h>
 
 #include <curses.h>
@@ -16,6 +17,12 @@
 #define DSFEMON_VERSION "0.10-modern"
 // Number of monitor refreshes between automatic rotations of long service lists.
 #define CHANNEL_ROTATION_REFRESHES 8
+// Lines used by one complete frontend block: frontend rows, demux row, detail row, and separator.
+#define FRONTEND_BLOCK_LINES 9
+// The first row is reserved for program/version and page status.
+#define HEADER_BAR_LINES 1
+// The last row is reserved for keyboard help.
+#define FOOTER_BAR_LINES 1
 
 static volatile sig_atomic_t g_stop_requested = 0;
 
@@ -35,6 +42,60 @@ static bool quit_key(int key) {
   return key == 'q' || key == 'Q';
 }
 
+// Move to the previous page using common terminal navigation keys.
+static bool previous_page_key(int key) {
+  return key == KEY_PPAGE || key == KEY_UP;
+}
+
+// Move to the next page using common terminal navigation keys.
+static bool next_page_key(int key) {
+  return key == KEY_NPAGE || key == KEY_DOWN;
+}
+
+// Count opened DVB frontends that match the current scan selection.
+static unsigned int count_frontends(struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config) {
+  unsigned int frontend_count = 0;
+
+  for (int adapter = scan_config->min_adapter; adapter < scan_config->max_adapter; adapter++) {
+    if (!dvb_scan_adapter_enabled(scan_config, adapter))
+      continue;
+
+    for (int subadapter = 0; subadapter < scan_config->max_subadapter; subadapter++) {
+      struct dvb_data_s *current_dvb_data = &dvb_data[dvb_device_index(adapter, subadapter, scan_config->max_subadapter)];
+      if (current_dvb_data->fefd >= 0)
+        frontend_count++;
+    }
+  }
+
+  return frontend_count;
+}
+
+// Compute how many complete frontend blocks fit between header and footer.
+static unsigned int frontends_per_page(int terminal_rows) {
+  int available_rows = terminal_rows - HEADER_BAR_LINES - FOOTER_BAR_LINES;
+
+  if (available_rows <= 0)
+    return 0;
+
+  return available_rows / FRONTEND_BLOCK_LINES;
+}
+
+// Convert frontend count and page capacity into a user-visible page count.
+static unsigned int count_pages(unsigned int frontend_count, unsigned int page_capacity) {
+  if (frontend_count == 0 || page_capacity == 0)
+    return 1;
+
+  return (frontend_count + page_capacity - 1) / page_capacity;
+}
+
+// Keep page index valid after terminal resize or device-count changes.
+static unsigned int clamp_page(unsigned int current_page, unsigned int page_count) {
+  if (page_count == 0 || current_page < page_count)
+    return current_page;
+
+  return page_count - 1;
+}
+
 // Render one frontend block: frontend rows, demux summary, and detail placeholder.
 static unsigned int render_frontend(struct dvb_data_s *dvb_data, int adapter, int subadapter, unsigned int card_count, unsigned int line, unsigned int refresh_cycle) {
   char fedev[128];
@@ -50,6 +111,98 @@ static unsigned int render_frontend(struct dvb_data_s *dvb_data, int adapter, in
   line += full_line();
 
   return line;
+}
+
+// Render only complete frontend blocks that belong to the requested page.
+static unsigned int render_frontend_page(struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, unsigned int page, unsigned int page_capacity, unsigned int first_line, unsigned int refresh_cycle) {
+  unsigned int line = first_line;
+  unsigned int frontend_index = 0;
+  unsigned int first_frontend = page * page_capacity;
+  unsigned int last_frontend = first_frontend + page_capacity;
+
+  if (page_capacity == 0)
+    return line;
+
+  for (int adapter = scan_config->min_adapter; adapter < scan_config->max_adapter; adapter++) {
+    if (!dvb_scan_adapter_enabled(scan_config, adapter))
+      continue;
+
+    for (int subadapter = 0; subadapter < scan_config->max_subadapter; subadapter++) {
+      struct dvb_data_s *current_dvb_data = &dvb_data[dvb_device_index(adapter, subadapter, scan_config->max_subadapter)];
+      if (current_dvb_data->fefd < 0)
+        continue;
+
+      if (frontend_index >= first_frontend && frontend_index < last_frontend)
+        line = render_frontend(current_dvb_data, adapter, subadapter, frontend_index, line, refresh_cycle);
+
+      frontend_index++;
+    }
+  }
+
+  return line;
+}
+
+// Show program identity on the left and page/device status on the right.
+static void render_header_bar(int header_row, int col, unsigned int current_page, unsigned int page_count, unsigned int frontend_count) {
+  char left_text[128];
+  char right_text[128];
+
+  snprintf(left_text, sizeof(left_text), " dsfemon %s ", DSFEMON_VERSION);
+  snprintf(right_text, sizeof(right_text), " frontends %u | page %u/%u ",
+           frontend_count,
+           current_page + 1,
+           page_count);
+
+  attron(A_REVERSE);
+  mvhline(header_row, 0, ' ', col);
+  mvaddnstr(header_row, 0, left_text, col);
+
+  int right_len = strlen(right_text);
+  int right_col = col > right_len ? col - right_len : 0;
+  if (right_col > (int)strlen(left_text))
+    mvaddnstr(header_row, right_col, right_text, col - right_col);
+
+  attroff(A_REVERSE);
+}
+
+// Show compact bottom keyboard help.
+static void render_help_bar(int footer_row, int col) {
+  const char *help_text = " q quit | PgUp/PgDn page | Up/Down page ";
+
+  attron(A_REVERSE);
+  mvhline(footer_row, 0, ' ', col);
+  mvaddnstr(footer_row, 0, help_text, col);
+  attroff(A_REVERSE);
+  refresh();
+}
+
+// Explain why a page with discovered frontends cannot render any complete block.
+static unsigned int render_terminal_too_small_line(unsigned int line) {
+  move(line, 0);
+  RED_BOLD_ON;
+  printw("Terminal window is too small to display one complete frontend block.");
+  RED_BOLD_OFF;
+  full_line();
+
+  return line + 1;
+}
+
+// Apply one keyboard action to the running/page state.
+static void handle_key(int key, bool *running, unsigned int *current_page, unsigned int page_count) {
+  if (quit_key(key)) {
+    *running = false;
+
+    return;
+  }
+
+  if (next_page_key(key) && *current_page + 1 < page_count) {
+    (*current_page)++;
+
+    return;
+  }
+
+  if (previous_page_key(key) && *current_page > 0)
+    (*current_page)--;
 }
 
 // Program entry point: initialize ncurses, discover devices, render until quit.
@@ -108,56 +261,49 @@ int main(int argc, char **argv) {
 
   bool running = true;
   unsigned int refresh_cycle = 0;
+  unsigned int current_page = 0;
 
   while (running) {
     if (g_stop_requested)
       running = false;
-    unsigned int line = 0;
-    unsigned int card_count = 0;
     int key;
 
     int row, col;
     getmaxyx(stdscr, row, col);
-    (void)col;
 
-    for (int adapter = scan_config.min_adapter; running && adapter < scan_config.max_adapter; adapter++) {
-      if (!dvb_scan_adapter_enabled(&scan_config, adapter))
-        continue;
+    unsigned int frontend_count = count_frontends(dvb_data, &scan_config);
+    unsigned int page_capacity = frontends_per_page(row);
+    unsigned int page_count = count_pages(frontend_count, page_capacity);
+    current_page = clamp_page(current_page, page_count);
+    unsigned int line = HEADER_BAR_LINES;
+    int footer_row = row > 0 ? row - 1 : 0;
 
-      for (int subadapter = 0; running && subadapter < scan_config.max_subadapter; subadapter++) {
-        struct dvb_data_s *current_dvb_data = &dvb_data[dvb_device_index(adapter, subadapter, scan_config.max_subadapter)];
-        if (current_dvb_data->fefd < 0)
-          continue;
+    if (row > 0)
+      render_header_bar(0, col, current_page, page_count, frontend_count);
 
-        line = render_frontend(current_dvb_data, adapter, subadapter, card_count, line, refresh_cycle);
-
-        timeout(0);
-        key = getch();
-
-        if (quit_key(key)) {
-          running = false;
-          break;
-        }
-
-        card_count++;
+    if (line < (unsigned int)footer_row) {
+      if (frontend_count == 0) {
+        move(line, 0);
+        line += no_devices_line(&scan_config);
+      } else if (page_capacity == 0) {
+        line = render_terminal_too_small_line(line);
+      } else {
+        line = render_frontend_page(dvb_data, &scan_config, current_page, page_capacity, line, refresh_cycle);
       }
     }
-    timeout(0);
-    key = getch();
-    if (quit_key(key))
-      running = false;
 
-    if (card_count == 0) {
-      move(line, 0);
-      line += no_devices_line(&scan_config);
+    for (int i = line; i < footer_row; i++) {
+      move(i, 0);
+      full_line();
     }
 
-    move(line, 0);
-    printw("Femon - DVB Frontend monitor developed by David Seidl, version %s", DSFEMON_VERSION);
-    line += full_line();
+    if (row > HEADER_BAR_LINES)
+      render_help_bar(footer_row, col);
 
-    for (int i = line; i < row; i++)
-      full_line();
+    timeout(0);
+    key = getch();
+    handle_key(key, &running, &current_page, page_count);
+
     usleep(500000);
     refresh_cycle++;
     if (g_stop_requested)
@@ -168,5 +314,6 @@ int main(int argc, char **argv) {
   free(dvb_data);
   curs_set(1);
   endwin();
+
   return 0;
 }

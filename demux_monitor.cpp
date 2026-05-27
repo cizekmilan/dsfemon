@@ -30,7 +30,7 @@ int print_daemon_monitor(int adapter, int demux) {
   (void)x;
   (void)y;
 
-  printw("Sorry demux monitor is not inplemented now");
+  printw("Sorry demux monitor is not implemented now");
 
   return 1;
 }

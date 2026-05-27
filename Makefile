@@ -6,6 +6,7 @@ TARGET := dsfemon
 BUILD_DIR := build
 
 SOURCES := \
+	command_line.cpp \
 	femon.cpp \
 	ncurses_present.cpp \
 	color.cpp \
