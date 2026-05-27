@@ -129,6 +129,6 @@ This project is based on his original work and continues it as a modernized open
 
 ## License
 
-The original author, David Seidl, granted permission to continue and publish the project under the condition that open-source principles are preserved.
+Permission was granted to continue and publish the project under the condition that open-source principles are preserved.
 
 A standard open-source license should be added once the exact license choice is confirmed.
