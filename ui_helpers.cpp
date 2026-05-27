@@ -18,8 +18,6 @@ int full_line(void) {
   for (int i = x; i < col; i++)
     mvaddch(y, i, ' ');
 
-  refresh();
-
   return 1;
 }
 

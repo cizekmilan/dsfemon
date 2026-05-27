@@ -3,6 +3,7 @@
 #include <curses.h>
 
 #include "color.h"
+#include "demux_monitor.h"
 
 // Print one service name and its trailing separator when it fits on the row.
 static bool print_channel_name_if_fits(const char *service_name, int len, bool *printed_service) {
@@ -93,11 +94,10 @@ int demux_main_info(struct dvb_data_s *dvb_data, unsigned int channel_offset_see
 }
 
 // Reserve the row that will become the demux/service detail entry point.
-int detail_line(unsigned int frontend_index, bool selected, struct dvb_data_s *dvb_data) {
+int detail_line(unsigned int frontend_index, bool selected) {
   int row, col;
   getmaxyx(stdscr, row, col);
   (void)row;
-  (void)dvb_data;
 
   attron(A_UNDERLINE);
   if (selected) {

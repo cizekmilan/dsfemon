@@ -36,6 +36,18 @@
 
 static volatile sig_atomic_t g_stop_requested = 0;
 
+// Mutable UI state shared by rendering and keyboard handling in the main thread.
+struct screen_state {
+  bool detail_open;
+  bool redraw_requested;
+  unsigned int refresh_cycle;
+  unsigned int current_page;
+  unsigned int selected_frontend;
+  unsigned int frontend_count;
+  unsigned int page_capacity;
+  unsigned int page_count;
+};
+
 // Async-signal-safe stop request consumed by the main loop.
 static void request_stop(int signal_number) {
   (void)signal_number;
@@ -164,7 +176,7 @@ static unsigned int render_frontend(struct dvb_data_s *dvb_data, int adapter, in
   move(line, 0);
   line += demux_main_info(dvb_data, (refresh_cycle / CHANNEL_ROTATION_REFRESHES) + card_count);
   move(line, 0);
-  line += detail_line(card_count, card_count == selected_frontend, dvb_data);
+  line += detail_line(card_count, card_count == selected_frontend);
   move(line, 0);
   line += full_line();
 
@@ -369,7 +381,6 @@ static void render_help_bar(int footer_row, int col, const char *help_text, unsi
   }
 
   attroff(A_REVERSE);
-  refresh();
 }
 
 // Explain why a page with discovered frontends cannot render any complete block.
@@ -381,6 +392,74 @@ static unsigned int render_terminal_too_small_line(unsigned int line) {
   full_line();
 
   return line + 1;
+}
+
+// Recompute counts and page placement before drawing or handling navigation.
+static void update_screen_state(struct screen_state *state, struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, int row) {
+  state->frontend_count = count_frontends(dvb_data, scan_config);
+  state->page_capacity = frontends_per_page(row);
+  state->page_count = count_pages(state->frontend_count, state->page_capacity);
+  state->selected_frontend = clamp_selected_frontend(state->selected_frontend, state->frontend_count);
+
+  if (state->frontend_count == 0)
+    state->detail_open = false;
+
+  if (state->frontend_count > 0 && state->page_capacity > 0 && !state->detail_open)
+    state->current_page = page_for_selected_frontend(state->selected_frontend, state->page_capacity);
+
+  state->current_page = clamp_page(state->current_page, state->page_count);
+}
+
+// Render the content area between the fixed header and footer bars.
+static unsigned int render_screen_body(struct screen_state *state, struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, unsigned int line, int footer_row) {
+  if (state->detail_open && line < (unsigned int)footer_row)
+    return render_demux_detail_placeholder(dvb_data, scan_config, state->selected_frontend, state->frontend_count, line);
+
+  if (line >= (unsigned int)footer_row)
+    return line;
+
+  if (state->frontend_count == 0) {
+    move(line, 0);
+
+    return line + no_devices_line(scan_config);
+  }
+
+  if (state->page_capacity == 0)
+    return render_terminal_too_small_line(line);
+
+  return render_frontend_page(dvb_data, scan_config, state->current_page, state->page_capacity, state->selected_frontend, line, state->refresh_cycle);
+}
+
+// Draw one complete screen frame and flush it once after all rows are updated.
+static void render_screen(struct screen_state *state, struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config) {
+  int row, col;
+  getmaxyx(stdscr, row, col);
+
+  update_screen_state(state, dvb_data, scan_config, row);
+
+  unsigned int line = HEADER_BAR_LINES + HEADER_GAP_LINES;
+  int footer_row = row > 0 ? row - 1 : 0;
+
+  if (row > 0) {
+    render_header_bar(0, col, state->current_page, state->page_count, state->frontend_count);
+
+    if (row > HEADER_BAR_LINES) {
+      move(HEADER_BAR_LINES, 0);
+      full_line();
+    }
+  }
+
+  line = render_screen_body(state, dvb_data, scan_config, line, footer_row);
+
+  for (int i = line; i < footer_row; i++) {
+    move(i, 0);
+    full_line();
+  }
+
+  if (row > HEADER_BAR_LINES)
+    render_help_bar(footer_row, col, state->detail_open ? detail_footer_help_text() : monitor_footer_help_text(), state->refresh_cycle);
+
+  refresh();
 }
 
 // Apply one keyboard action to the monitor selection/page state.
@@ -498,13 +577,7 @@ int main(int argc, char **argv) {
   discover_dvb_devices(dvb_data, DVB_DEVICE_COUNT, &scan_config);
 
   bool running = true;
-  bool detail_open = false;
-  bool redraw_requested = true;
-  unsigned int refresh_cycle = 0;
-  unsigned int current_page = 0;
-  unsigned int selected_frontend = 0;
-  unsigned int frontend_count = 0;
-  unsigned int page_capacity = 0;
+  struct screen_state screen = {false, true, 0, 0, 0, 0, 0, 1};
   unsigned long long next_refresh_time_us = 0;
 
   timeout(INPUT_POLL_INTERVAL_US / 1000);
@@ -516,68 +589,24 @@ int main(int argc, char **argv) {
     unsigned long long now_us = monotonic_time_us();
     bool refresh_due = now_us >= next_refresh_time_us;
 
-    if (redraw_requested || refresh_due) {
-      int row, col;
-      getmaxyx(stdscr, row, col);
-
-      frontend_count = count_frontends(dvb_data, &scan_config);
-      page_capacity = frontends_per_page(row);
-      unsigned int page_count = count_pages(frontend_count, page_capacity);
-      selected_frontend = clamp_selected_frontend(selected_frontend, frontend_count);
-      if (frontend_count == 0)
-        detail_open = false;
-      if (frontend_count > 0 && page_capacity > 0 && !detail_open)
-        current_page = page_for_selected_frontend(selected_frontend, page_capacity);
-      current_page = clamp_page(current_page, page_count);
-      unsigned int line = HEADER_BAR_LINES + HEADER_GAP_LINES;
-      int footer_row = row > 0 ? row - 1 : 0;
-
-      if (row > 0) {
-        render_header_bar(0, col, current_page, page_count, frontend_count);
-
-        if (row > HEADER_BAR_LINES) {
-          move(HEADER_BAR_LINES, 0);
-          full_line();
-        }
-      }
-
-      if (detail_open && line < (unsigned int)footer_row) {
-        line = render_demux_detail_placeholder(dvb_data, &scan_config, selected_frontend, frontend_count, line);
-      } else if (line < (unsigned int)footer_row) {
-        if (frontend_count == 0) {
-          move(line, 0);
-          line += no_devices_line(&scan_config);
-        } else if (page_capacity == 0) {
-          line = render_terminal_too_small_line(line);
-        } else {
-          line = render_frontend_page(dvb_data, &scan_config, current_page, page_capacity, selected_frontend, line, refresh_cycle);
-        }
-      }
-
-      for (int i = line; i < footer_row; i++) {
-        move(i, 0);
-        full_line();
-      }
-
-      if (row > HEADER_BAR_LINES)
-        render_help_bar(footer_row, col, detail_open ? detail_footer_help_text() : monitor_footer_help_text(), refresh_cycle);
-
-      redraw_requested = false;
+    if (screen.redraw_requested || refresh_due) {
+      render_screen(&screen, dvb_data, &scan_config);
+      screen.redraw_requested = false;
 
       if (refresh_due) {
-        refresh_cycle++;
+        screen.refresh_cycle++;
         next_refresh_time_us = monotonic_time_us() + REFRESH_INTERVAL_US;
       }
     }
 
     int key = getch();
     if (key != ERR) {
-      if (detail_open)
-        handle_detail_key(key, &running, &detail_open);
+      if (screen.detail_open)
+        handle_detail_key(key, &running, &screen.detail_open);
       else
-        handle_monitor_key(key, &running, &detail_open, &current_page, &selected_frontend, frontend_count, page_capacity);
+        handle_monitor_key(key, &running, &screen.detail_open, &screen.current_page, &screen.selected_frontend, screen.frontend_count, screen.page_capacity);
 
-      redraw_requested = true;
+      screen.redraw_requested = true;
     }
 
     if (g_stop_requested)

@@ -46,8 +46,6 @@ struct demux_snapshot {
   struct demux_service_snapshot services[DEMUX_MAX_SERVICES];
 };
 
-int print_daemon_monitor(int adapter, int demux);
-
 // Start, stop, and join the per-device demux reader thread.
 int start_dvb_reader(struct dvb_data_s *dvb_data);
 void request_dvb_reader_stop(struct dvb_data_s *dvb_data);

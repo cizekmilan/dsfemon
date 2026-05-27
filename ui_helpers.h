@@ -5,7 +5,7 @@
 
 #include "device_discovery.h"
 
-// Clear from the current cursor position to the end of the row and refresh.
+// Clear from the current cursor position to the end of the row.
 int full_line(void);
 
 // Return the available width for a signal bar, reserving its closing bracket.

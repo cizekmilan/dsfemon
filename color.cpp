@@ -1,5 +1,4 @@
 #include <ncurses.h>
-#include <stdio.h>
 
 // Map the classic terminal colors plus reverse-video status pairs to ncurses ids.
 void set_my_color(void) {
