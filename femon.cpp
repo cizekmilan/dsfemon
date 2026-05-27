@@ -36,6 +36,7 @@ static bool quit_key(int key) {
 // Render one frontend block: frontend rows, demux summary, and detail placeholder.
 static unsigned int render_frontend(struct dvb_data_s *dvb_data, int adapter, int subadapter, unsigned int card_count, unsigned int line, unsigned int refresh_cycle) {
   char fedev[128];
+
   format_frontend_path(fedev, sizeof(fedev), adapter, subadapter);
 
   line = render_frontend_status_lines(dvb_data->fefd, fedev, line);

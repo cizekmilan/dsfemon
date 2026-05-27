@@ -402,6 +402,7 @@ static int device_fe_param_line(const struct frontend_status_snapshot *snapshot)
 // Render all frontend-only rows and return the next free screen line.
 unsigned int render_frontend_status_lines(int frontend_fd, const char *frontend_path, unsigned int line) {
   struct frontend_status_snapshot frontend_status;
+
   read_frontend_status_snapshot(frontend_fd, &frontend_status);
 
   move(line, 0);

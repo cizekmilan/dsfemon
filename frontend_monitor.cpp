@@ -7,6 +7,7 @@
 // Thin wrapper around FE_GET_PROPERTY for one batch of DVBv5 properties.
 static int get_frontend_properties(int fd, struct dtv_property *properties, unsigned int property_count) {
   struct dtv_properties props;
+
   memset(&props, 0, sizeof(props));
   props.num = property_count;
   props.props = properties;
