@@ -330,6 +330,26 @@ static bool is_satellite_delivery(fe_delivery_system_t delivery_system) {
          delivery_system == SYS_TURBO;
 }
 
+// Identify delivery systems where symbol rate is a meaningful frontend value.
+static bool uses_symbol_rate(fe_delivery_system_t delivery_system) {
+  return is_satellite_delivery(delivery_system) ||
+         delivery_system == SYS_DVBC_ANNEX_A ||
+         delivery_system == SYS_DVBC_ANNEX_B ||
+         delivery_system == SYS_DVBC_ANNEX_C ||
+         delivery_system == SYS_ISDBC;
+}
+
+// Hide symbol-rate placeholders for terrestrial systems where SR is not used.
+static bool should_show_symbol_rate(const struct frontend_v5_snapshot *snapshot) {
+  if (!snapshot->has_symbol_rate || snapshot->symbol_rate == 0)
+    return false;
+
+  if (!snapshot->has_delivery_system || snapshot->delivery_system == SYS_UNDEFINED)
+    return true;
+
+  return uses_symbol_rate(snapshot->delivery_system);
+}
+
 // Convert DVB-S/S2 IF frequency back to the user-facing transponder frequency.
 static float satellite_frequency_ghz(uint32_t frequency) {
   if (frequency + 10600000 >= 11700000)
@@ -340,9 +360,10 @@ static float satellite_frequency_ghz(uint32_t frequency) {
 
 // Render compact DVBv5 tuning parameters when the driver returns useful data.
 static int device_fe_param_v5_line(const struct frontend_v5_snapshot *snapshot) {
+  bool show_symbol_rate = should_show_symbol_rate(snapshot);
   bool has_useful_data = (snapshot->has_delivery_system && snapshot->delivery_system != SYS_UNDEFINED) ||
                          (snapshot->has_frequency && snapshot->frequency > 0) ||
-                         (snapshot->has_symbol_rate && snapshot->symbol_rate > 0) ||
+                         show_symbol_rate ||
                          (snapshot->has_bandwidth_hz && snapshot->bandwidth_hz > 0);
   if (!has_useful_data)
     return 0;
@@ -361,7 +382,7 @@ static int device_fe_param_v5_line(const struct frontend_v5_snapshot *snapshot) 
     print_field_if_fits("FREQ:", frequency);
   }
 
-  if (snapshot->has_symbol_rate && snapshot->symbol_rate > 0) {
+  if (show_symbol_rate) {
     char symbol_rate[32];
     snprintf(symbol_rate, sizeof(symbol_rate), "%5.3f Msym/s", (float)snapshot->symbol_rate / 1000000);
     print_field_if_fits("SR:", symbol_rate);

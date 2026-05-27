@@ -148,7 +148,7 @@ static void render_header_bar(int header_row, int col, unsigned int current_page
   char right_text[128];
 
   snprintf(left_text, sizeof(left_text), " dsfemon %s ", DSFEMON_VERSION);
-  snprintf(right_text, sizeof(right_text), " frontends %u | page %u/%u ",
+  snprintf(right_text, sizeof(right_text), " frontends: %u | page %u/%u ",
            frontend_count,
            current_page + 1,
            page_count);
@@ -167,7 +167,7 @@ static void render_header_bar(int header_row, int col, unsigned int current_page
 
 // Show compact bottom keyboard help.
 static void render_help_bar(int footer_row, int col) {
-  const char *help_text = " q quit | PgUp/PgDn page | Up/Down page ";
+  const char *help_text = " PgUp/PgDn page | Up/Down page | q quit ";
 
   attron(A_REVERSE);
   mvhline(footer_row, 0, ' ', col);
