@@ -1,8 +1,8 @@
-# dsfemon
+# 📡 dsfemon
 
 > A terminal-based DVB frontend monitor for Linux. It can be used as a more capable alternative to the basic `femon` tool from the `dvb-apps` package, especially on systems with many DVB frontends. `dsfemon` is designed for quick operational overview of tuner state, signal quality, tuning parameters, and service information in multistream backend environments, including IPTV backends.
 
-## 📡 Overview
+## 🎯 Overview
 
 `dsfemon` is a fork and modernized continuation of the original Femon DVB frontend monitor developed by David Seidl in 2012.
 
@@ -108,7 +108,7 @@ Additional commands and useful arguments:
 └── color.*                # ncurses color pairs/macros
 ```
 
-## Current Status
+## Status
 
 - ✅ modern build against `ncursesw`
 - ✅ default adapter scan starts at adapter `0`
