@@ -1,7 +1,7 @@
 #include <ncurses.h>
 #include <stdio.h>
 
-// Map the classic seven terminal colors to ncurses color-pair ids.
+// Map the classic terminal colors plus reverse-video status pairs to ncurses ids.
 void set_my_color(void) {
   init_pair(1, COLOR_RED, COLOR_BLACK);
   init_pair(2, COLOR_GREEN, COLOR_BLACK);
@@ -10,4 +10,6 @@ void set_my_color(void) {
   init_pair(5, COLOR_MAGENTA, COLOR_BLACK);
   init_pair(6, COLOR_CYAN, COLOR_BLACK);
   init_pair(7, COLOR_WHITE, COLOR_BLACK);
+  // Used under A_REVERSE, so this displays as red text on the normal bar background.
+  init_pair(8, COLOR_WHITE, COLOR_RED);
 }

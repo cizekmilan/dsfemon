@@ -15,7 +15,7 @@
 // Render frontend path, type, and tuner name.
 static int device_info_line(const struct frontend_status_snapshot *snapshot, const char *devname) {
   RED_BOLD_ON;
-  printw("Found device:");
+  printw("Found device: ");
   RED_BOLD_OFF;
   GREEN_ON;
   printw("%s ", devname);

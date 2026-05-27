@@ -14,13 +14,16 @@
 #include "frontend_view.h"
 #include "ui_helpers.h"
 
-#define DSFEMON_VERSION "0.10-modern"
+#define DSFEMON_VERSION "v0.71.2026"
+#define DSFEMON_TITLE "dsfemon - DVB Frontend monitor, originally developed by David Seidl"
 // Number of monitor refreshes between automatic rotations of long service lists.
 #define CHANNEL_ROTATION_REFRESHES 8
 // Lines used by one complete frontend block: frontend rows, demux row, detail row, and separator.
 #define FRONTEND_BLOCK_LINES 9
 // The first row is reserved for program/version and page status.
 #define HEADER_BAR_LINES 1
+// Keep the first frontend visually separated from the header bar.
+#define HEADER_GAP_LINES 1
 // The last row is reserved for keyboard help.
 #define FOOTER_BAR_LINES 1
 // Main monitor refresh cadence.
@@ -74,7 +77,7 @@ static unsigned int count_frontends(struct dvb_data_s *dvb_data, const struct dv
 
 // Compute how many complete frontend blocks fit between header and footer.
 static unsigned int frontends_per_page(int terminal_rows) {
-  int available_rows = terminal_rows - HEADER_BAR_LINES - FOOTER_BAR_LINES;
+  int available_rows = terminal_rows - HEADER_BAR_LINES - HEADER_GAP_LINES - FOOTER_BAR_LINES;
 
   if (available_rows <= 0)
     return 0;
@@ -144,28 +147,49 @@ static unsigned int render_frontend_page(struct dvb_data_s *dvb_data, const stru
   return line;
 }
 
+// Render the right-aligned header counters with highlighted numeric values.
+static void render_header_status(int header_row, int col, const char *left_text, unsigned int current_page, unsigned int page_count, unsigned int frontend_count) {
+  char status_text[128];
+
+  snprintf(status_text, sizeof(status_text), " frontends: %u | page %u/%u ",
+           frontend_count,
+           current_page + 1,
+           page_count);
+
+  int status_len = strlen(status_text);
+  int status_col = col > status_len ? col - status_len : 0;
+  if (status_col <= (int)strlen(left_text))
+    return;
+
+  move(header_row, status_col);
+  printw(" frontends: ");
+  REVERSE_RED_ON;
+  printw("%u", frontend_count);
+  REVERSE_RED_OFF;
+  printw(" | page ");
+  REVERSE_RED_ON;
+  printw("%u", current_page + 1);
+  REVERSE_RED_OFF;
+  printw("/");
+  REVERSE_RED_ON;
+  printw("%u", page_count);
+  REVERSE_RED_OFF;
+  printw(" ");
+}
+
 // Show program identity on the left and page/device status on the right.
 static void render_header_bar(int header_row, int col, unsigned int current_page, unsigned int page_count, unsigned int frontend_count) {
   if (col <= 0)
     return;
 
   char left_text[128];
-  char right_text[128];
 
-  snprintf(left_text, sizeof(left_text), " dsfemon %s ", DSFEMON_VERSION);
-  snprintf(right_text, sizeof(right_text), " frontends: %u | page %u/%u ",
-           frontend_count,
-           current_page + 1,
-           page_count);
+  snprintf(left_text, sizeof(left_text), " %s ", DSFEMON_TITLE);
 
   attron(A_REVERSE);
   mvhline(header_row, 0, ' ', col);
   mvaddnstr(header_row, 0, left_text, col);
-
-  int right_len = strlen(right_text);
-  int right_col = col > right_len ? col - right_len : 0;
-  if (right_col > (int)strlen(left_text))
-    mvaddnstr(header_row, right_col, right_text, col - right_col);
+  render_header_status(header_row, col, left_text, current_page, page_count, frontend_count);
 
   attroff(A_REVERSE);
 }
@@ -180,7 +204,7 @@ static int footer_indicator_column(int col) {
   if (col <= 0)
     return -1;
 
-  int indicator_len = 3;
+  int indicator_len = strlen(" " DSFEMON_VERSION " [/] ");
   int indicator_col = col > indicator_len ? col - indicator_len : -1;
 
   if (indicator_col <= (int)strlen(footer_help_text()))
@@ -196,17 +220,20 @@ static void render_help_bar(int footer_row, int col, unsigned int refresh_cycle)
 
   static const char spinner[] = "|/-\\";
   const char *help_text = footer_help_text();
-  char indicator_text[4];
-
-  snprintf(indicator_text, sizeof(indicator_text), " %c ", spinner[refresh_cycle % 4]);
 
   attron(A_REVERSE);
   mvhline(footer_row, 0, ' ', col);
   mvaddnstr(footer_row, 0, help_text, col);
 
   int indicator_col = footer_indicator_column(col);
-  if (indicator_col >= 0)
-    mvaddnstr(footer_row, indicator_col, indicator_text, col - indicator_col);
+  if (indicator_col >= 0) {
+    move(footer_row, indicator_col);
+    printw(" %s [", DSFEMON_VERSION);
+    REVERSE_RED_ON;
+    printw("%c", spinner[refresh_cycle % 4]);
+    REVERSE_RED_OFF;
+    printw("] ");
+  }
 
   attroff(A_REVERSE);
   refresh();
@@ -311,11 +338,17 @@ int main(int argc, char **argv) {
     unsigned int page_capacity = frontends_per_page(row);
     unsigned int page_count = count_pages(frontend_count, page_capacity);
     current_page = clamp_page(current_page, page_count);
-    unsigned int line = HEADER_BAR_LINES;
+    unsigned int line = HEADER_BAR_LINES + HEADER_GAP_LINES;
     int footer_row = row > 0 ? row - 1 : 0;
 
-    if (row > 0)
+    if (row > 0) {
       render_header_bar(0, col, current_page, page_count, frontend_count);
+
+      if (row > HEADER_BAR_LINES) {
+        move(HEADER_BAR_LINES, 0);
+        full_line();
+      }
+    }
 
     if (line < (unsigned int)footer_row) {
       if (frontend_count == 0) {

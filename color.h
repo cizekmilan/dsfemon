@@ -49,4 +49,7 @@ void set_my_color(void);
 #define WHITE_BOLD_ON attron(A_BOLD | COLOR_PAIR(7))
 #define WHITE_BOLD_OFF attroff(A_BOLD | COLOR_PAIR(7))
 
+#define REVERSE_RED_ON attron(COLOR_PAIR(8))
+#define REVERSE_RED_OFF attroff(COLOR_PAIR(8))
+
 #endif

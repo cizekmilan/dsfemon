@@ -66,18 +66,20 @@ bool print_field_if_fits(const char *label, const char *value) {
 int no_devices_line(const struct dvb_scan_config *config) {
   int row, col;
   char adapter_selection[128];
+  const char *selection_label = config->adapter_filter_enabled ? "selected adapters " : "configured adapter range ";
 
   getmaxyx(stdscr, row, col);
   (void)row;
   format_scan_adapter_selection(config, adapter_selection, sizeof(adapter_selection));
 
   RED_BOLD_ON;
-  printw("No DVB frontend devices found in configured adapter selection ");
+  printw("No DVB frontend devices found in ");
+  printw("%s", selection_label);
   RED_BOLD_OFF;
   DESC_VALL_ON;
   printw("%s", adapter_selection);
   DESC_VALL_OFF;
-  printw(". Check /dev/dvb or adapter scan settings.");
+  printw(". Check /dev/dvb, permissions, or adapter scan settings.");
   hline(' ', col);
 
   return 1;
