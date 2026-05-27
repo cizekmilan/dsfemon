@@ -1,0 +1,6 @@
+BasedOnStyle: LLVM
+IndentWidth: 2
+IndentCaseLabels: true
+UseTab: Never
+ColumnLimit: 0
+SortIncludes: false
