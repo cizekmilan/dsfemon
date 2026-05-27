@@ -1,0 +1,23 @@
+# Build outputs
+/build/
+/dsfemon
+*.o
+*.obj
+*.d
+
+# Debug/runtime leftovers
+core
+core.*
+*.log
+
+# Editor and OS metadata
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Optional local tooling output
+compile_commands.json
