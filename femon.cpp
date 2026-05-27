@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <curses.h>
@@ -28,6 +29,10 @@
 #define FOOTER_BAR_LINES 1
 // Main monitor refresh cadence.
 #define REFRESH_INTERVAL_US 500000
+// Keyboard polling cadence. Lower than DVB refresh so navigation feels immediate.
+#define INPUT_POLL_INTERVAL_US 25000
+// Keep standalone Esc responsive while still allowing arrow-key escape sequences.
+#define ESC_KEY_DELAY_MS 50
 
 static volatile sig_atomic_t g_stop_requested = 0;
 
@@ -49,12 +54,41 @@ static bool quit_key(int key) {
 
 // Move to the previous page using common terminal navigation keys.
 static bool previous_page_key(int key) {
-  return key == KEY_PPAGE || key == KEY_UP;
+  return key == KEY_PPAGE;
 }
 
 // Move to the next page using common terminal navigation keys.
 static bool next_page_key(int key) {
-  return key == KEY_NPAGE || key == KEY_DOWN;
+  return key == KEY_NPAGE;
+}
+
+// Move the selected frontend row inside/across monitor pages.
+static bool previous_frontend_key(int key) {
+  return key == KEY_UP;
+}
+
+// Move the selected frontend row inside/across monitor pages.
+static bool next_frontend_key(int key) {
+  return key == KEY_DOWN;
+}
+
+// Open the selected frontend's demux detail view.
+static bool enter_key(int key) {
+  return key == '\n' || key == '\r' || key == KEY_ENTER;
+}
+
+// Leave a temporary detail screen without quitting the whole program.
+static bool detail_back_key(int key) {
+  return key == 27 || key == KEY_BACKSPACE;
+}
+
+// Monotonic microsecond clock used to decouple input polling from DVB redraws.
+static unsigned long long monotonic_time_us(void) {
+  struct timespec now;
+
+  clock_gettime(CLOCK_MONOTONIC, &now);
+
+  return (unsigned long long)now.tv_sec * 1000000 + (unsigned long long)now.tv_nsec / 1000;
 }
 
 // Count opened DVB frontends that match the current scan selection.
@@ -101,8 +135,27 @@ static unsigned int clamp_page(unsigned int current_page, unsigned int page_coun
   return page_count - 1;
 }
 
+// Keep the selected frontend index valid when devices or filters change.
+static unsigned int clamp_selected_frontend(unsigned int selected_frontend, unsigned int frontend_count) {
+  if (frontend_count == 0)
+    return 0;
+
+  if (selected_frontend < frontend_count)
+    return selected_frontend;
+
+  return frontend_count - 1;
+}
+
+// Align the current page so the selected frontend's detail row is visible.
+static unsigned int page_for_selected_frontend(unsigned int selected_frontend, unsigned int page_capacity) {
+  if (page_capacity == 0)
+    return 0;
+
+  return selected_frontend / page_capacity;
+}
+
 // Render one frontend block: frontend rows, demux summary, and detail placeholder.
-static unsigned int render_frontend(struct dvb_data_s *dvb_data, int adapter, int subadapter, unsigned int card_count, unsigned int line, unsigned int refresh_cycle) {
+static unsigned int render_frontend(struct dvb_data_s *dvb_data, int adapter, int subadapter, unsigned int card_count, unsigned int selected_frontend, unsigned int line, unsigned int refresh_cycle) {
   char fedev[128];
 
   format_frontend_path(fedev, sizeof(fedev), adapter, subadapter);
@@ -111,7 +164,7 @@ static unsigned int render_frontend(struct dvb_data_s *dvb_data, int adapter, in
   move(line, 0);
   line += demux_main_info(dvb_data, (refresh_cycle / CHANNEL_ROTATION_REFRESHES) + card_count);
   move(line, 0);
-  line += detail_line(card_count, dvb_data);
+  line += detail_line(card_count, card_count == selected_frontend, dvb_data);
   move(line, 0);
   line += full_line();
 
@@ -119,7 +172,7 @@ static unsigned int render_frontend(struct dvb_data_s *dvb_data, int adapter, in
 }
 
 // Render only complete frontend blocks that belong to the requested page.
-static unsigned int render_frontend_page(struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, unsigned int page, unsigned int page_capacity, unsigned int first_line, unsigned int refresh_cycle) {
+static unsigned int render_frontend_page(struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, unsigned int page, unsigned int page_capacity, unsigned int selected_frontend, unsigned int first_line, unsigned int refresh_cycle) {
   unsigned int line = first_line;
   unsigned int frontend_index = 0;
   unsigned int first_frontend = page * page_capacity;
@@ -138,13 +191,89 @@ static unsigned int render_frontend_page(struct dvb_data_s *dvb_data, const stru
         continue;
 
       if (frontend_index >= first_frontend && frontend_index < last_frontend)
-        line = render_frontend(current_dvb_data, adapter, subadapter, frontend_index, line, refresh_cycle);
+        line = render_frontend(current_dvb_data, adapter, subadapter, frontend_index, selected_frontend, line, refresh_cycle);
 
       frontend_index++;
     }
   }
 
   return line;
+}
+
+// Find the Nth discovered frontend in the same order used by the monitor view.
+static struct dvb_data_s *frontend_by_index(struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, unsigned int selected_frontend) {
+  unsigned int frontend_index = 0;
+
+  for (int adapter = scan_config->min_adapter; adapter < scan_config->max_adapter; adapter++) {
+    if (!dvb_scan_adapter_enabled(scan_config, adapter))
+      continue;
+
+    for (int subadapter = 0; subadapter < scan_config->max_subadapter; subadapter++) {
+      struct dvb_data_s *current_dvb_data = &dvb_data[dvb_device_index(adapter, subadapter, scan_config->max_subadapter)];
+      if (current_dvb_data->fefd < 0)
+        continue;
+
+      if (frontend_index == selected_frontend)
+        return current_dvb_data;
+
+      frontend_index++;
+    }
+  }
+
+  return NULL;
+}
+
+// Render the temporary fullscreen target used while the demux detail matures.
+static unsigned int render_demux_detail_placeholder(struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, unsigned int selected_frontend, unsigned int frontend_count, unsigned int line) {
+  char fedev[128];
+  char dedev[128];
+  struct demux_snapshot snapshot;
+  struct dvb_data_s *selected_dvb_data = frontend_by_index(dvb_data, scan_config, selected_frontend);
+
+  if (selected_dvb_data == NULL) {
+    move(line, 0);
+    RED_BOLD_ON;
+    printw("Selected frontend is not available.");
+    RED_BOLD_OFF;
+    full_line();
+
+    return line + 1;
+  }
+
+  format_frontend_path(fedev, sizeof(fedev), selected_dvb_data->adapter, selected_dvb_data->subadapter);
+  format_demux_path(dedev, sizeof(dedev), selected_dvb_data->adapter, selected_dvb_data->subadapter);
+  read_demux_snapshot(selected_dvb_data, &snapshot);
+
+  move(line++, 0);
+  CYAN_BOLD_ON;
+  printw("Demux detail");
+  CYAN_BOLD_OFF;
+  printw(" for frontend %u/%u", selected_frontend + 1, frontend_count);
+  full_line();
+
+  move(line++, 0);
+  printw("Frontend: %s", fedev);
+  full_line();
+
+  move(line++, 0);
+  printw("Demux:    %s", dedev);
+  full_line();
+
+  move(line++, 0);
+  printw("Network:  %s", snapshot.network_name_len > 0 ? snapshot.network_name : "waiting for demux info");
+  full_line();
+
+  move(line++, 0);
+  printw("Services: %d", snapshot.service_count);
+  full_line();
+
+  move(line + 1, 0);
+  WHITE_BOLD_ON;
+  printw("Full service and PMT detail will be implemented here.");
+  WHITE_BOLD_OFF;
+  full_line();
+
+  return line + 2;
 }
 
 // Render the right-aligned header counters with highlighted numeric values.
@@ -194,38 +323,42 @@ static void render_header_bar(int header_row, int col, unsigned int current_page
   attroff(A_REVERSE);
 }
 
-// Keep the footer help text in one place so the spinner can avoid overlapping it.
-static const char *footer_help_text(void) {
-  return " PgUp/PgDn page | Up/Down page | q quit ";
+// Keep monitor keyboard help in one place so the spinner can avoid overlapping it.
+static const char *monitor_footer_help_text(void) {
+  return " Up/Down select | Enter detail | PgUp/PgDn page | q quit ";
+}
+
+// Keep detail keyboard help separate from the monitor navigation help.
+static const char *detail_footer_help_text(void) {
+  return " Esc back | q quit ";
 }
 
 // Return the right-aligned footer indicator column, or -1 when the row is tight.
-static int footer_indicator_column(int col) {
+static int footer_indicator_column(int col, const char *help_text) {
   if (col <= 0)
     return -1;
 
   int indicator_len = strlen(" " DSFEMON_VERSION " [/] ");
   int indicator_col = col > indicator_len ? col - indicator_len : -1;
 
-  if (indicator_col <= (int)strlen(footer_help_text()))
+  if (indicator_col <= (int)strlen(help_text))
     return -1;
 
   return indicator_col;
 }
 
 // Show compact bottom keyboard help plus a refresh spinner on the right.
-static void render_help_bar(int footer_row, int col, unsigned int refresh_cycle) {
+static void render_help_bar(int footer_row, int col, const char *help_text, unsigned int refresh_cycle) {
   if (col <= 0)
     return;
 
   static const char spinner[] = "|/-\\";
-  const char *help_text = footer_help_text();
 
   attron(A_REVERSE);
   mvhline(footer_row, 0, ' ', col);
   mvaddnstr(footer_row, 0, help_text, col);
 
-  int indicator_col = footer_indicator_column(col);
+  int indicator_col = footer_indicator_column(col, help_text);
   if (indicator_col >= 0) {
     move(footer_row, indicator_col);
     printw(" %s [", DSFEMON_VERSION);
@@ -250,22 +383,63 @@ static unsigned int render_terminal_too_small_line(unsigned int line) {
   return line + 1;
 }
 
-// Apply one keyboard action to the running/page state.
-static void handle_key(int key, bool *running, unsigned int *current_page, unsigned int page_count) {
+// Apply one keyboard action to the monitor selection/page state.
+static void handle_monitor_key(int key, bool *running, bool *detail_open, unsigned int *current_page, unsigned int *selected_frontend, unsigned int frontend_count, unsigned int page_capacity) {
   if (quit_key(key)) {
     *running = false;
 
     return;
   }
 
-  if (next_page_key(key) && *current_page + 1 < page_count) {
-    (*current_page)++;
+  if (enter_key(key) && frontend_count > 0) {
+    *detail_open = true;
 
     return;
   }
 
-  if (previous_page_key(key) && *current_page > 0)
+  if (next_frontend_key(key) && *selected_frontend + 1 < frontend_count) {
+    (*selected_frontend)++;
+
+    if (page_capacity > 0)
+      *current_page = page_for_selected_frontend(*selected_frontend, page_capacity);
+
+    return;
+  }
+
+  if (previous_frontend_key(key) && *selected_frontend > 0) {
+    (*selected_frontend)--;
+
+    if (page_capacity > 0)
+      *current_page = page_for_selected_frontend(*selected_frontend, page_capacity);
+
+    return;
+  }
+
+  unsigned int page_count = count_pages(frontend_count, page_capacity);
+
+  if (next_page_key(key) && *current_page + 1 < page_count) {
+    (*current_page)++;
+    *selected_frontend = clamp_selected_frontend(*current_page * page_capacity, frontend_count);
+
+    return;
+  }
+
+  if (previous_page_key(key) && *current_page > 0) {
     (*current_page)--;
+    *selected_frontend = clamp_selected_frontend(*current_page * page_capacity, frontend_count);
+  }
+}
+
+// Apply one keyboard action while the temporary demux detail screen is open.
+static void handle_detail_key(int key, bool *running, bool *detail_open) {
+  if (quit_key(key)) {
+    *running = false;
+
+    return;
+  }
+
+  if (detail_back_key(key))
+    *detail_open = false;
 }
 
 // Program entry point: initialize ncurses, discover devices, render until quit.
@@ -302,6 +476,7 @@ int main(int argc, char **argv) {
   noecho();
   cbreak();
   keypad(stdscr, TRUE);
+  set_escdelay(ESC_KEY_DELAY_MS);
   curs_set(0);
 
   if (has_colors()) {
@@ -323,58 +498,88 @@ int main(int argc, char **argv) {
   discover_dvb_devices(dvb_data, DVB_DEVICE_COUNT, &scan_config);
 
   bool running = true;
+  bool detail_open = false;
+  bool redraw_requested = true;
   unsigned int refresh_cycle = 0;
   unsigned int current_page = 0;
+  unsigned int selected_frontend = 0;
+  unsigned int frontend_count = 0;
+  unsigned int page_capacity = 0;
+  unsigned long long next_refresh_time_us = 0;
+
+  timeout(INPUT_POLL_INTERVAL_US / 1000);
 
   while (running) {
     if (g_stop_requested)
       running = false;
-    int key;
 
-    int row, col;
-    getmaxyx(stdscr, row, col);
+    unsigned long long now_us = monotonic_time_us();
+    bool refresh_due = now_us >= next_refresh_time_us;
 
-    unsigned int frontend_count = count_frontends(dvb_data, &scan_config);
-    unsigned int page_capacity = frontends_per_page(row);
-    unsigned int page_count = count_pages(frontend_count, page_capacity);
-    current_page = clamp_page(current_page, page_count);
-    unsigned int line = HEADER_BAR_LINES + HEADER_GAP_LINES;
-    int footer_row = row > 0 ? row - 1 : 0;
+    if (redraw_requested || refresh_due) {
+      int row, col;
+      getmaxyx(stdscr, row, col);
 
-    if (row > 0) {
-      render_header_bar(0, col, current_page, page_count, frontend_count);
+      frontend_count = count_frontends(dvb_data, &scan_config);
+      page_capacity = frontends_per_page(row);
+      unsigned int page_count = count_pages(frontend_count, page_capacity);
+      selected_frontend = clamp_selected_frontend(selected_frontend, frontend_count);
+      if (frontend_count == 0)
+        detail_open = false;
+      if (frontend_count > 0 && page_capacity > 0 && !detail_open)
+        current_page = page_for_selected_frontend(selected_frontend, page_capacity);
+      current_page = clamp_page(current_page, page_count);
+      unsigned int line = HEADER_BAR_LINES + HEADER_GAP_LINES;
+      int footer_row = row > 0 ? row - 1 : 0;
 
-      if (row > HEADER_BAR_LINES) {
-        move(HEADER_BAR_LINES, 0);
+      if (row > 0) {
+        render_header_bar(0, col, current_page, page_count, frontend_count);
+
+        if (row > HEADER_BAR_LINES) {
+          move(HEADER_BAR_LINES, 0);
+          full_line();
+        }
+      }
+
+      if (detail_open && line < (unsigned int)footer_row) {
+        line = render_demux_detail_placeholder(dvb_data, &scan_config, selected_frontend, frontend_count, line);
+      } else if (line < (unsigned int)footer_row) {
+        if (frontend_count == 0) {
+          move(line, 0);
+          line += no_devices_line(&scan_config);
+        } else if (page_capacity == 0) {
+          line = render_terminal_too_small_line(line);
+        } else {
+          line = render_frontend_page(dvb_data, &scan_config, current_page, page_capacity, selected_frontend, line, refresh_cycle);
+        }
+      }
+
+      for (int i = line; i < footer_row; i++) {
+        move(i, 0);
         full_line();
       }
-    }
 
-    if (line < (unsigned int)footer_row) {
-      if (frontend_count == 0) {
-        move(line, 0);
-        line += no_devices_line(&scan_config);
-      } else if (page_capacity == 0) {
-        line = render_terminal_too_small_line(line);
-      } else {
-        line = render_frontend_page(dvb_data, &scan_config, current_page, page_capacity, line, refresh_cycle);
+      if (row > HEADER_BAR_LINES)
+        render_help_bar(footer_row, col, detail_open ? detail_footer_help_text() : monitor_footer_help_text(), refresh_cycle);
+
+      redraw_requested = false;
+
+      if (refresh_due) {
+        refresh_cycle++;
+        next_refresh_time_us = monotonic_time_us() + REFRESH_INTERVAL_US;
       }
     }
 
-    for (int i = line; i < footer_row; i++) {
-      move(i, 0);
-      full_line();
+    int key = getch();
+    if (key != ERR) {
+      if (detail_open)
+        handle_detail_key(key, &running, &detail_open);
+      else
+        handle_monitor_key(key, &running, &detail_open, &current_page, &selected_frontend, frontend_count, page_capacity);
+
+      redraw_requested = true;
     }
 
-    if (row > HEADER_BAR_LINES)
-      render_help_bar(footer_row, col, refresh_cycle);
-
-    timeout(0);
-    key = getch();
-    handle_key(key, &running, &current_page, page_count);
-
-    usleep(REFRESH_INTERVAL_US);
-    refresh_cycle++;
     if (g_stop_requested)
       running = false;
   }

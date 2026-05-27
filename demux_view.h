@@ -6,7 +6,7 @@
 // Render the network name and service list for one demux snapshot.
 int demux_main_info(struct dvb_data_s *dvb_data, unsigned int channel_offset_seed);
 
-// Render the reserved row that will later open the demux/service detail view.
-int detail_line(int card_count, struct dvb_data_s *dvb_data);
+// Render the selectable row that opens the future demux/service detail view.
+int detail_line(unsigned int frontend_index, bool selected, struct dvb_data_s *dvb_data);
 
 #endif

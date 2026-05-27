@@ -69,7 +69,7 @@ void format_frontend_path(char *buffer, size_t buffer_size, int adapter, int sub
 }
 
 // Build the demux device path paired with the frontend path.
-static void format_demux_path(char *buffer, size_t buffer_size, int adapter, int subadapter) {
+void format_demux_path(char *buffer, size_t buffer_size, int adapter, int subadapter) {
   snprintf(buffer, buffer_size, DEMUX_DEVICE, adapter, subadapter);
 }
 

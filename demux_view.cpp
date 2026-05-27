@@ -93,21 +93,32 @@ int demux_main_info(struct dvb_data_s *dvb_data, unsigned int channel_offset_see
 }
 
 // Reserve the row that will become the demux/service detail entry point.
-int detail_line(int card_count, struct dvb_data_s *dvb_data) {
+int detail_line(unsigned int frontend_index, bool selected, struct dvb_data_s *dvb_data) {
   int row, col;
   getmaxyx(stdscr, row, col);
   (void)row;
   (void)dvb_data;
 
-  WHITE_BOLD_ON;
-  attron(A_REVERSE);
-  printw("%d", card_count);
-  attroff(A_REVERSE);
   attron(A_UNDERLINE);
-  printw(" For more demux info (not implemented now)");
+  if (selected) {
+    attron(A_REVERSE);
+    attron(A_BOLD);
+    printw(">");
+    attroff(A_BOLD);
+  } else {
+    attron(A_REVERSE);
+    printw("%u", frontend_index);
+    attroff(A_REVERSE);
+  }
+
+  WHITE_BOLD_ON;
+  printw(" See demux details ...");
   hline(' ', col);
   WHITE_BOLD_OFF;
   attroff(A_UNDERLINE);
+
+  if (selected)
+    attroff(A_REVERSE);
 
   return 1;
 }

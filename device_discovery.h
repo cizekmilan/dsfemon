@@ -33,5 +33,6 @@ int dvb_device_index(int adapter, int subadapter, int max_subadapter);
 bool dvb_scan_adapter_enabled(const struct dvb_scan_config *config, int adapter);
 void format_scan_adapter_selection(const struct dvb_scan_config *config, char *buffer, size_t buffer_size);
 void format_frontend_path(char *buffer, size_t buffer_size, int adapter, int subadapter);
+void format_demux_path(char *buffer, size_t buffer_size, int adapter, int subadapter);
 
 #endif
