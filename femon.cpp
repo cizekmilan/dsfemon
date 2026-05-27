@@ -5,6 +5,7 @@
 
 #include <curses.h>
 
+#include "command_line.h"
 #include "color.h"
 #include "demux_monitor.h"
 #include "demux_view.h"
@@ -13,6 +14,7 @@
 #include "ui_helpers.h"
 
 #define DSFEMON_VERSION "0.10-modern"
+// Number of monitor refreshes between automatic rotations of long service lists.
 #define CHANNEL_ROTATION_REFRESHES 8
 
 static volatile sig_atomic_t g_stop_requested = 0;
@@ -52,8 +54,30 @@ static unsigned int render_frontend(struct dvb_data_s *dvb_data, int adapter, in
 
 // Program entry point: initialize ncurses, discover devices, render until quit.
 int main(int argc, char **argv) {
-  (void)argc;
-  (void)argv;
+  struct command_line_options options;
+  char command_line_error[160];
+
+  init_command_line_options(&options);
+
+  if (parse_command_line(argc, argv, &options, command_line_error, sizeof(command_line_error)) != 0) {
+    fprintf(stderr, "%s\n\n", command_line_error);
+    print_usage(stderr, argv[0]);
+
+    return 1;
+  }
+
+  if (options.action == COMMAND_LINE_HELP) {
+    print_usage(stdout, argv[0]);
+
+    return 0;
+  }
+
+  if (options.action == COMMAND_LINE_VERSION) {
+    printf("dsfemon %s\n", DSFEMON_VERSION);
+
+    return 0;
+  }
+
   atexit(close_curses);
   signal(SIGINT, request_stop);
   signal(SIGTERM, request_stop);
@@ -69,10 +93,7 @@ int main(int argc, char **argv) {
     set_my_color();
   }
 
-  struct dvb_scan_config scan_config = {
-      DVB_DEFAULT_MIN_ADAPTER,
-      DVB_DEFAULT_MAX_ADAPTER,
-      DVB_MAX_SUBADAPTERS};
+  struct dvb_scan_config scan_config = options.scan_config;
 
   struct dvb_data_s *dvb_data = (dvb_data_s *)calloc(DVB_DEVICE_COUNT, sizeof(*dvb_data));
 
@@ -99,7 +120,10 @@ int main(int argc, char **argv) {
     getmaxyx(stdscr, row, col);
     (void)col;
 
-    for (int adapter = scan_config.min_adapter; running && adapter < scan_config.max_adapter; adapter++)
+    for (int adapter = scan_config.min_adapter; running && adapter < scan_config.max_adapter; adapter++) {
+      if (!dvb_scan_adapter_enabled(&scan_config, adapter))
+        continue;
+
       for (int subadapter = 0; running && subadapter < scan_config.max_subadapter; subadapter++) {
         struct dvb_data_s *current_dvb_data = &dvb_data[dvb_device_index(adapter, subadapter, scan_config.max_subadapter)];
         if (current_dvb_data->fefd < 0)
@@ -117,6 +141,7 @@ int main(int argc, char **argv) {
 
         card_count++;
       }
+    }
     timeout(0);
     key = getch();
     if (quit_key(key))

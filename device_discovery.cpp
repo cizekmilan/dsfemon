@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #ifndef O_LARGEFILE
@@ -16,6 +17,47 @@
 // Map adapter/subadapter coordinates to the flat dvb_data array index.
 int dvb_device_index(int adapter, int subadapter, int max_subadapter) {
   return adapter * max_subadapter + subadapter;
+}
+
+// Check whether an adapter is part of the configured scan selection.
+bool dvb_scan_adapter_enabled(const struct dvb_scan_config *config, int adapter) {
+  if (adapter < config->min_adapter || adapter >= config->max_adapter)
+    return false;
+
+  if (!config->adapter_filter_enabled)
+    return true;
+
+  return config->adapter_enabled[adapter];
+}
+
+// Format the adapter selection for diagnostics shown before/inside ncurses.
+void format_scan_adapter_selection(const struct dvb_scan_config *config, char *buffer, size_t buffer_size) {
+  int used = 0;
+
+  if (!config->adapter_filter_enabled) {
+    snprintf(buffer, buffer_size, "%d-%d", config->min_adapter, config->max_adapter - 1);
+
+    return;
+  }
+
+  buffer[0] = '\0';
+
+  for (int adapter = config->min_adapter; adapter < config->max_adapter; adapter++) {
+    if (!dvb_scan_adapter_enabled(config, adapter))
+      continue;
+
+    int written = snprintf(buffer + used, buffer_size - used, "%s%d", used > 0 ? "," : "", adapter);
+    if (written < 0)
+      return;
+
+    if ((size_t)written >= buffer_size - used)
+      return;
+
+    used += written;
+  }
+
+  if (used == 0)
+    snprintf(buffer, buffer_size, "none");
 }
 
 // Build the frontend device path used by discovery and display.
@@ -48,6 +90,9 @@ int discover_dvb_devices(struct dvb_data_s *dvb_data, int device_count, const st
   int discovered_frontends = 0;
 
   for (int adapter = config->min_adapter; adapter < config->max_adapter; adapter++) {
+    if (!dvb_scan_adapter_enabled(config, adapter))
+      continue;
+
     for (int subadapter = 0; subadapter < config->max_subadapter; subadapter++) {
       int index = dvb_device_index(adapter, subadapter, config->max_subadapter);
       if (index < 0 || index >= device_count)

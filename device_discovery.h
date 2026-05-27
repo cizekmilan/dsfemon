@@ -14,11 +14,13 @@
 #define DVB_DEFAULT_MIN_ADAPTER 0
 #define DVB_DEFAULT_MAX_ADAPTER DVB_MAX_ADAPTERS
 
-// Adapter/subadapter scan range used during startup device discovery.
+// Adapter/subadapter scan selection used during startup device discovery.
 struct dvb_scan_config {
   int min_adapter;
   int max_adapter;
   int max_subadapter;
+  bool adapter_filter_enabled;
+  bool adapter_enabled[DVB_MAX_ADAPTERS];
 };
 
 // Prepare, discover, and release the DVB device table owned by main().
@@ -28,6 +30,8 @@ void cleanup_dvb_devices(struct dvb_data_s *dvb_data, int device_count);
 
 // Helpers for translating adapter/subadapter coordinates into paths/table slots.
 int dvb_device_index(int adapter, int subadapter, int max_subadapter);
+bool dvb_scan_adapter_enabled(const struct dvb_scan_config *config, int adapter);
+void format_scan_adapter_selection(const struct dvb_scan_config *config, char *buffer, size_t buffer_size);
 void format_frontend_path(char *buffer, size_t buffer_size, int adapter, int subadapter);
 
 #endif

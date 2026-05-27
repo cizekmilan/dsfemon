@@ -62,17 +62,20 @@ bool print_field_if_fits(const char *label, const char *value) {
   return true;
 }
 
-// Show the configured adapter range when discovery finds no frontends.
+// Show the configured adapter selection when discovery finds no frontends.
 int no_devices_line(const struct dvb_scan_config *config) {
   int row, col;
+  char adapter_selection[128];
+
   getmaxyx(stdscr, row, col);
   (void)row;
+  format_scan_adapter_selection(config, adapter_selection, sizeof(adapter_selection));
 
   RED_BOLD_ON;
-  printw("No DVB frontend devices found in configured adapter range ");
+  printw("No DVB frontend devices found in configured adapter selection ");
   RED_BOLD_OFF;
   DESC_VALL_ON;
-  printw("%d-%d", config->min_adapter, config->max_adapter - 1);
+  printw("%s", adapter_selection);
   DESC_VALL_OFF;
   printw(". Check /dev/dvb or adapter scan settings.");
   hline(' ', col);
