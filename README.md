@@ -2,6 +2,8 @@
 
 > A terminal-based DVB frontend monitor for Linux. It can be used as a more capable alternative to the basic `femon` tool from the `dvb-apps` package, especially on systems with many DVB frontends. `dsfemon` is designed for quick operational overview of tuner state, signal quality, tuning parameters, and service information in multistream backend environments, including IPTV backends.
 
+![dsfemon main window](docs/screenshots/dsfemon-main.png)
+
 ## 🎯 Overview
 
 `dsfemon` is a fork and modernized continuation of the original Femon DVB frontend monitor developed by David Seidl in 2012.
@@ -92,20 +94,23 @@ Additional commands and useful arguments:
 
 ```text
 /
-├── dsfemon.cpp            # main ncurses loop, paging, keyboard handling
-├── command_line.*         # command-line options
-├── device_discovery.*     # DVB device scanning and lifecycle
-├── frontend_monitor.*     # DVBv5 property collection
-├── frontend_status.*      # frontend status snapshot collection
-├── frontend_view.*        # frontend/status rendering
-├── demux_reader.cpp       # background PAT/PMT/NIT/SDT section reader
-├── demux_snapshot.cpp     # stable demux data copied for UI rendering
-├── demux_view.*           # demux/service summary rendering
-├── si_parser.cpp          # PSI/SI parser helpers
-├── *_table.h              # small PSI/SI table constants
-├── ui_helpers.*           # shared ncurses rendering helpers
-├── ncurses_present.*      # terminal bar helpers
-└── color.*                # ncurses color pairs/macros
+├── docs/
+│   └── screenshots/
+│       └── dsfemon-main.png   # main application screenshot
+├── dsfemon.cpp                # main ncurses loop, paging, keyboard handling
+├── command_line.*             # command-line options
+├── device_discovery.*         # DVB device scanning and lifecycle
+├── frontend_monitor.*         # DVBv5 property collection
+├── frontend_status.*          # frontend status snapshot collection
+├── frontend_view.*            # frontend/status rendering
+├── demux_reader.cpp           # background PAT/PMT/NIT/SDT section reader
+├── demux_snapshot.cpp         # stable demux data copied for UI rendering
+├── demux_view.*               # demux/service summary rendering
+├── si_parser.cpp              # PSI/SI parser helpers
+├── *_table.h                  # small PSI/SI table constants
+├── ui_helpers.*               # shared ncurses rendering helpers
+├── ncurses_present.*          # terminal bar helpers
+└── color.*                    # ncurses color pairs/macros
 ```
 
 ## Status

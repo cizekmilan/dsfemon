@@ -7,7 +7,7 @@ BUILD_DIR := build
 
 SOURCES := \
 	command_line.cpp \
-	femon.cpp \
+	dsfemon.cpp \
 	ncurses_present.cpp \
 	color.cpp \
 	demux_monitor.cpp \
@@ -30,9 +30,7 @@ NCURSES_LIBS := $(shell $(PKG_CONFIG) --libs ncursesw)
 CXXFLAGS ?= -Wall -Wextra -Wpedantic -g
 LDLIBS = $(NCURSES_LIBS) -lpthread
 
-.PHONY: femon clean format format-check install
-
-femon: $(TARGET)
+.PHONY: clean format format-check install
 
 $(TARGET): $(OBJECTS)
 	$(CXX) $(NCURSES_CFLAGS) $(CXXFLAGS) $(OBJECTS) $(LDLIBS) -o $@
