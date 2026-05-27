@@ -32,6 +32,9 @@ bool dvb_scan_adapter_enabled(const struct dvb_scan_config *config, int adapter)
 
 // Format the adapter selection for diagnostics shown before/inside ncurses.
 void format_scan_adapter_selection(const struct dvb_scan_config *config, char *buffer, size_t buffer_size) {
+  if (buffer == NULL || buffer_size == 0)
+    return;
+
   int used = 0;
 
   if (!config->adapter_filter_enabled) {

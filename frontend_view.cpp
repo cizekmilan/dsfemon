@@ -10,6 +10,8 @@
 #include "ncurses_present.h"
 #include "ui_helpers.h"
 
+#define DVB_RELATIVE_SCALE_MAX 0xffff
+
 // Render frontend path, type, and tuner name.
 static int device_info_line(const struct frontend_status_snapshot *snapshot, const char *devname) {
   RED_BOLD_ON;
@@ -37,6 +39,14 @@ static int device_status_line(const struct frontend_status_snapshot *snapshot) {
   return 1;
 }
 
+// Convert the DVB API's 16-bit relative scale to a rounded display percentage.
+static int relative_value_percent(unsigned long long value) {
+  if (value >= DVB_RELATIVE_SCALE_MAX)
+    return 100;
+
+  return (int)((value * 100 + DVB_RELATIVE_SCALE_MAX / 2) / DVB_RELATIVE_SCALE_MAX);
+}
+
 // Convert a DVBv5 statistic into the compact text used beside bars/counters.
 static bool format_dtv_stat_value(const struct dtv_stats *stat, char *buffer, size_t buffer_size) {
   if (stat->scale == FE_SCALE_DECIBEL) {
@@ -45,7 +55,7 @@ static bool format_dtv_stat_value(const struct dtv_stats *stat, char *buffer, si
   }
 
   if (stat->scale == FE_SCALE_RELATIVE) {
-    snprintf(buffer, buffer_size, "%3.0f%%", (float)stat->uvalue * 100 / 0xffff);
+    snprintf(buffer, buffer_size, "%3d%%", relative_value_percent(stat->uvalue));
     return true;
   }
 
@@ -126,16 +136,16 @@ static int device_signal_line(const struct frontend_status_snapshot *snapshot) {
     DESC_COL_OFF;
     DESC_VALL_ON;
     if (snapshot->has_legacy_signal)
-      printw("%3.0f%%", (float)(snapshot->legacy_signal) * 100 / (0xffff));
+      printw("%3d%%", relative_value_percent(snapshot->legacy_signal));
     if (has_v5_signal)
       printw(" %s", signal);
     DESC_VALL_OFF;
 
     int len = remaining_bar_width();
     if (len > 0 && snapshot->has_legacy_signal)
-      linebar((snapshot->legacy_signal) * 100 / (0xffff), len);
+      linebar(relative_value_percent(snapshot->legacy_signal), len);
     else if (len > 0 && snapshot->v5.signal_strength.scale == FE_SCALE_RELATIVE)
-      linebar((int)(snapshot->v5.signal_strength.uvalue * 100 / 0xffff), len);
+      linebar(relative_value_percent(snapshot->v5.signal_strength.uvalue), len);
   }
 
   full_line();
@@ -156,16 +166,16 @@ static int device_snr_line(const struct frontend_status_snapshot *snapshot) {
     DESC_COL_OFF;
     DESC_VALL_ON;
     if (snapshot->has_legacy_snr)
-      printw("   %3.0f%%", (float)(snapshot->legacy_snr) * 100 / (0xffff));
+      printw("   %3d%%", relative_value_percent(snapshot->legacy_snr));
     if (has_v5_cnr)
       printw(" %s", cnr);
     DESC_VALL_OFF;
 
     int len = remaining_bar_width();
     if (len > 0 && snapshot->has_legacy_snr)
-      linebar((snapshot->legacy_snr) * 100 / (0xffff), len);
+      linebar(relative_value_percent(snapshot->legacy_snr), len);
     else if (len > 0 && snapshot->v5.cnr.scale == FE_SCALE_RELATIVE)
-      linebar((int)(snapshot->v5.cnr.uvalue * 100 / 0xffff), len);
+      linebar(relative_value_percent(snapshot->v5.cnr.uvalue), len);
   }
 
   full_line();

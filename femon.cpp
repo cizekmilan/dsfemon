@@ -23,6 +23,8 @@
 #define HEADER_BAR_LINES 1
 // The last row is reserved for keyboard help.
 #define FOOTER_BAR_LINES 1
+// Main monitor refresh cadence.
+#define REFRESH_INTERVAL_US 500000
 
 static volatile sig_atomic_t g_stop_requested = 0;
 
@@ -144,6 +146,9 @@ static unsigned int render_frontend_page(struct dvb_data_s *dvb_data, const stru
 
 // Show program identity on the left and page/device status on the right.
 static void render_header_bar(int header_row, int col, unsigned int current_page, unsigned int page_count, unsigned int frontend_count) {
+  if (col <= 0)
+    return;
+
   char left_text[128];
   char right_text[128];
 
@@ -165,13 +170,44 @@ static void render_header_bar(int header_row, int col, unsigned int current_page
   attroff(A_REVERSE);
 }
 
-// Show compact bottom keyboard help.
-static void render_help_bar(int footer_row, int col) {
-  const char *help_text = " PgUp/PgDn page | Up/Down page | q quit ";
+// Keep the footer help text in one place so the spinner can avoid overlapping it.
+static const char *footer_help_text(void) {
+  return " PgUp/PgDn page | Up/Down page | q quit ";
+}
+
+// Return the right-aligned footer indicator column, or -1 when the row is tight.
+static int footer_indicator_column(int col) {
+  if (col <= 0)
+    return -1;
+
+  int indicator_len = 3;
+  int indicator_col = col > indicator_len ? col - indicator_len : -1;
+
+  if (indicator_col <= (int)strlen(footer_help_text()))
+    return -1;
+
+  return indicator_col;
+}
+
+// Show compact bottom keyboard help plus a refresh spinner on the right.
+static void render_help_bar(int footer_row, int col, unsigned int refresh_cycle) {
+  if (col <= 0)
+    return;
+
+  static const char spinner[] = "|/-\\";
+  const char *help_text = footer_help_text();
+  char indicator_text[4];
+
+  snprintf(indicator_text, sizeof(indicator_text), " %c ", spinner[refresh_cycle % 4]);
 
   attron(A_REVERSE);
   mvhline(footer_row, 0, ' ', col);
   mvaddnstr(footer_row, 0, help_text, col);
+
+  int indicator_col = footer_indicator_column(col);
+  if (indicator_col >= 0)
+    mvaddnstr(footer_row, indicator_col, indicator_text, col - indicator_col);
+
   attroff(A_REVERSE);
   refresh();
 }
@@ -298,13 +334,13 @@ int main(int argc, char **argv) {
     }
 
     if (row > HEADER_BAR_LINES)
-      render_help_bar(footer_row, col);
+      render_help_bar(footer_row, col, refresh_cycle);
 
     timeout(0);
     key = getch();
     handle_key(key, &running, &current_page, page_count);
 
-    usleep(500000);
+    usleep(REFRESH_INTERVAL_US);
     refresh_cycle++;
     if (g_stop_requested)
       running = false;

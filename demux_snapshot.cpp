@@ -35,6 +35,7 @@ static int clean_si_text(char *data, int len) {
   return clean_len;
 }
 
+// Build a display-ready demux snapshot without exposing live PID buffers to UI code.
 int read_demux_snapshot(struct dvb_data_s *dvb_data, struct demux_snapshot *snapshot) {
   if (dvb_data == NULL || snapshot == NULL)
     return -1;

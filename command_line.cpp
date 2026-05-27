@@ -85,6 +85,7 @@ static int parse_adapter_list(const char *text, struct dvb_scan_config *scan_con
   return 0;
 }
 
+// Fill defaults before parsing optional command-line overrides.
 void init_command_line_options(struct command_line_options *options) {
   options->action = COMMAND_LINE_RUN;
   options->scan_config.min_adapter = DVB_DEFAULT_MIN_ADAPTER;
@@ -155,6 +156,7 @@ int parse_command_line(int argc, char **argv, struct command_line_options *optio
   return 0;
 }
 
+// Print the stable user-facing CLI help text.
 void print_usage(FILE *stream, const char *program_name) {
   fprintf(stream, "Usage: %s [options]\n", program_name);
   fprintf(stream, "\n");

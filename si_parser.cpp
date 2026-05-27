@@ -94,6 +94,7 @@ static bool find_pmt_part(struct dvb_data_s *dvb_data, int program_pid, int sect
   return false;
 }
 
+// Return the end offset of usable SDT service entries, excluding the PSI CRC.
 static int sdt_services_end(struct dvb_data_s *dvb_data) {
   return psi_payload_end(dvb_data, SDT_PID, SDT_SECT_HEADER_LEN);
 }
