@@ -77,6 +77,8 @@ int read_demux_snapshot(struct dvb_data_s *dvb_data, struct demux_snapshot *snap
     service->free_ca_mode = si_sdt_service_free_ca_mode(dvb_data, service_index);
     service->provider_name_len = si_read_sdt_service_provider_name(dvb_data, service_index, service->provider_name);
     service->provider_name_len = clean_si_text(service->provider_name, service->provider_name_len);
+    service->languages_len = pmt_read_audio_languages(dvb_data, service->program_pid, service->languages, sizeof(service->languages));
+    service->ca_detail_len = pmt_read_ca_details(dvb_data, service->program_pid, service->ca_detail, sizeof(service->ca_detail));
     snapshot->service_count++;
   }
 

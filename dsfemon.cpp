@@ -30,7 +30,7 @@
 // Empty row between detail metadata and the service table header.
 #define DETAIL_TABLE_GAP_LINES 1
 // Selected-service metadata rows shown above the detail table.
-#define DETAIL_SELECTED_SUMMARY_LINES 2
+#define DETAIL_SELECTED_SUMMARY_LINES 3
 // Main UI refresh cadence.
 #define REFRESH_INTERVAL_US 500000
 // Keyboard polling cadence. Lower than DVB refresh so navigation feels immediate.
@@ -56,6 +56,9 @@ struct screen_state {
   unsigned int detail_scroll_offset;
   unsigned int detail_service_count;
   unsigned int detail_page_capacity;
+  bool detail_snapshot_valid;
+  unsigned int detail_snapshot_frontend;
+  struct demux_snapshot detail_snapshot;
 };
 
 // Async-signal-safe stop request consumed by the main loop.
@@ -305,6 +308,14 @@ static void reset_detail_service_selection(struct screen_state *state) {
   state->detail_page_capacity = 0;
 }
 
+// Start a detail session with a fresh snapshot cache for the selected frontend.
+static void reset_detail_screen(struct screen_state *state) {
+  reset_detail_service_selection(state);
+  state->detail_snapshot_valid = false;
+  state->detail_snapshot_frontend = state->selected_frontend;
+  memset(&state->detail_snapshot, 0, sizeof(state->detail_snapshot));
+}
+
 // Build the initial monitor state without relying on a long positional initializer.
 static struct screen_state init_screen_state(void) {
   struct screen_state state;
@@ -491,10 +502,9 @@ static void format_stream_summary(const struct demux_service_snapshot *service, 
     return;
 
   buffer[0] = '\0';
-  append_stream_summary_text(buffer, buffer_size, &used, "Streams:");
 
   if (service->stream_count <= 0) {
-    append_stream_summary_text(buffer, buffer_size, &used, " waiting for PMT data");
+    append_stream_summary_text(buffer, buffer_size, &used, "waiting for PMT data");
 
     return;
   }
@@ -507,7 +517,7 @@ static void format_stream_summary(const struct demux_service_snapshot *service, 
     if (stream_index > 0)
       append_stream_summary_text(buffer, buffer_size, &used, " |");
 
-    snprintf(stream_text, sizeof(stream_text), " %d %s", service->streams[stream_index].pid, stream_type_text);
+    snprintf(stream_text, sizeof(stream_text), "%d %s", service->streams[stream_index].pid, stream_type_text);
     append_stream_summary_text(buffer, buffer_size, &used, stream_text);
   }
 
@@ -519,12 +529,62 @@ static void format_stream_summary(const struct demux_service_snapshot *service, 
   }
 }
 
+// Build a compact conditional-access summary for the selected service.
+static void format_ca_summary(const struct demux_service_snapshot *service, char *buffer, size_t buffer_size) {
+  if (service->ca_detail_len > 0)
+    snprintf(buffer, buffer_size, "%s", service->ca_detail);
+  else if (service->free_ca_mode)
+    snprintf(buffer, buffer_size, "yes, details unavailable");
+  else
+    snprintf(buffer, buffer_size, "free");
+}
+
+// Print text without letting colored summary fields overflow the terminal row.
+static void add_detail_clipped_text(int col, const char *text) {
+  int y, x;
+  getyx(stdscr, y, x);
+  (void)y;
+
+  int remaining_cols = col - x;
+  if (remaining_cols > 0)
+    addnstr(text, remaining_cols);
+}
+
+// Highlight a compact detail summary label.
+static void add_detail_label(int col, const char *label) {
+  CYAN_BOLD_ON;
+  add_detail_clipped_text(col, label);
+  CYAN_BOLD_OFF;
+}
+
+// Highlight a positive detail summary value.
+static void add_detail_good_value(int col, const char *value) {
+  GREEN_ON;
+  add_detail_clipped_text(col, value);
+  GREEN_OFF;
+}
+
+// Highlight a technical/detail value.
+static void add_detail_info_value(int col, const char *value) {
+  WHITE_BOLD_ON;
+  add_detail_clipped_text(col, value);
+  WHITE_BOLD_OFF;
+}
+
+// Highlight a warning-style detail summary value.
+static void add_detail_warning_value(int col, const char *value) {
+  YELLOW_BOLD_ON;
+  add_detail_clipped_text(col, value);
+  YELLOW_BOLD_OFF;
+}
+
 // Print one service table row, clipping the service name to the terminal width.
 static void render_service_table_row(unsigned int line, int col, unsigned int service_index, const struct demux_service_snapshot *service, bool selected) {
   char service_id_text[16];
   char service_type_text[16];
   char program_pid_text[16];
   char stream_count_text[16];
+  const char *languages_text = service->languages_len > 0 ? service->languages : "-";
 
   if (service->service_id >= 0)
     snprintf(service_id_text, sizeof(service_id_text), "%d", service->service_id);
@@ -548,7 +608,23 @@ static void render_service_table_row(unsigned int line, int col, unsigned int se
 
   mvhline(line, 0, ' ', col);
   move(line, 0);
-  printw("%3u   %-5s   %-7s   %-7s   %-7s   ", service_index + 1, service_id_text, service_type_text, program_pid_text, stream_count_text);
+  printw("%3u   %-5s   ", service_index + 1, service_id_text);
+
+  if (!selected)
+    CYAN_ON;
+  printw("%-7s", service_type_text);
+  if (!selected)
+    CYAN_OFF;
+
+  printw("   %-7s   %-7s   ", program_pid_text, stream_count_text);
+
+  if (!selected && service->languages_len > 0)
+    CYAN_ON;
+  printw("%-15s", languages_text);
+  if (!selected && service->languages_len > 0)
+    CYAN_OFF;
+
+  printw("   ");
 
   if (!selected && service->free_ca_mode)
     YELLOW_BOLD_ON;
@@ -588,8 +664,8 @@ static unsigned int render_selected_service_summary(const struct screen_state *s
   const struct demux_service_snapshot *service = &snapshot->services[state->detail_selected_service];
   char service_type_text[16];
   char pcr_pid_text[16];
-  char summary[512];
   char stream_summary[512];
+  char ca_summary[256];
 
   format_service_type(service->service_type, service_type_text, sizeof(service_type_text));
 
@@ -598,18 +674,40 @@ static unsigned int render_selected_service_summary(const struct screen_state *s
   else
     snprintf(pcr_pid_text, sizeof(pcr_pid_text), "-");
 
-  snprintf(summary, sizeof(summary), "Selected: %s | Type: %s | Provider: %s | PCR PID: %s",
-           service->name,
-           service_type_text,
-           service->provider_name_len > 0 ? service->provider_name : "-",
-           pcr_pid_text);
   format_stream_summary(service, stream_summary, sizeof(stream_summary));
+  format_ca_summary(service, ca_summary, sizeof(ca_summary));
 
   move(line++, 0);
-  mvaddnstr(line - 1, 0, summary, col);
+  add_detail_label(col, "Selected: ");
+  add_detail_info_value(col, service->name);
+  add_detail_clipped_text(col, " | ");
+  add_detail_label(col, "Type: ");
+  add_detail_good_value(col, service_type_text);
+  add_detail_clipped_text(col, " | ");
+  add_detail_label(col, "Provider: ");
+  add_detail_good_value(col, service->provider_name_len > 0 ? service->provider_name : "-");
+  add_detail_clipped_text(col, " | ");
+  add_detail_label(col, "PCR PID: ");
+  add_detail_warning_value(col, pcr_pid_text);
   full_line();
+
   move(line++, 0);
-  mvaddnstr(line - 1, 0, stream_summary, col);
+  add_detail_label(col, "Streams: ");
+  add_detail_info_value(col, stream_summary);
+  add_detail_clipped_text(col, " | ");
+  add_detail_label(col, "Lang: ");
+  if (service->languages_len > 0)
+    add_detail_good_value(col, service->languages);
+  else
+    add_detail_clipped_text(col, "-");
+  full_line();
+
+  move(line++, 0);
+  add_detail_label(col, "CA: ");
+  if (service->ca_detail_len > 0 || service->free_ca_mode)
+    add_detail_warning_value(col, ca_summary);
+  else
+    add_detail_good_value(col, ca_summary);
   full_line();
 
   return line;
@@ -663,12 +761,13 @@ static unsigned int render_service_table(struct screen_state *state, const struc
   if (line >= (unsigned int)footer_row)
     return line;
 
-  snprintf(table_header, sizeof(table_header), "%3s   %-5s   %-7s   %-7s   %-7s   %-3s   %-8s   %s",
+  snprintf(table_header, sizeof(table_header), "%3s   %-5s   %-7s   %-7s   %-7s   %-15s   %-3s   %-8s   %s",
            "No",
            "SID",
            "Type",
            "PMT PID",
            "Streams",
+           "Lang",
            "CA",
            "Status",
            "Service");
@@ -713,6 +812,19 @@ static unsigned int render_demux_detail(struct screen_state *state, struct dvb_d
   format_frontend_path(fedev, sizeof(fedev), selected_dvb_data->adapter, selected_dvb_data->subadapter);
   format_demux_path(dedev, sizeof(dedev), selected_dvb_data->adapter, selected_dvb_data->subadapter);
   read_demux_snapshot(selected_dvb_data, &snapshot);
+
+  if (snapshot.service_count > 0) {
+    if (snapshot.network_name_len == 0 && state->detail_snapshot_valid && state->detail_snapshot_frontend == state->selected_frontend && state->detail_snapshot.network_name_len > 0) {
+      snapshot.network_name_len = state->detail_snapshot.network_name_len;
+      snprintf(snapshot.network_name, sizeof(snapshot.network_name), "%s", state->detail_snapshot.network_name);
+    }
+
+    state->detail_snapshot = snapshot;
+    state->detail_snapshot_frontend = state->selected_frontend;
+    state->detail_snapshot_valid = true;
+  } else if (state->detail_snapshot_valid && state->detail_snapshot_frontend == state->selected_frontend) {
+    snapshot = state->detail_snapshot;
+  }
 
   move(line++, 0);
   CYAN_BOLD_ON;
@@ -920,7 +1032,7 @@ static void handle_monitor_key(int key, bool *running, struct screen_state *stat
 
   if (enter_key(key) && state->frontend_count > 0) {
     state->detail_open = true;
-    reset_detail_service_selection(state);
+    reset_detail_screen(state);
 
     return;
   }
