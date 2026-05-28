@@ -129,6 +129,39 @@ static bool find_sdt_part(struct dvb_data_s *dvb_data, int section_number_i, int
   return false;
 }
 
+// Locate the standard SDT service descriptor for one service entry.
+static bool find_sdt_service_descriptor(struct dvb_data_s *dvb_data, int service_index, int *descriptor_pointer, int *descriptor_end) {
+  int part_pointer;
+  int descriptor_loop_end;
+
+  if (!find_sdt_part(dvb_data, service_index, &part_pointer, &descriptor_loop_end))
+    return false;
+
+  int pointer = part_pointer + SDT_PART_SECT_LEN;
+
+  while (pointer + 2 <= descriptor_loop_end) {
+    int current_descriptor_tag = dvb_data->pid_data[SDT_PID].data[pointer];
+    int current_descriptor_length = dvb_data->pid_data[SDT_PID].data[pointer + 1];
+    int current_descriptor_end = pointer + 2 + current_descriptor_length;
+    if (current_descriptor_end > descriptor_loop_end)
+      return false;
+
+    if (current_descriptor_tag == SERVICE_DESCRIPTOR) {
+      if (descriptor_pointer != NULL)
+        *descriptor_pointer = pointer;
+
+      if (descriptor_end != NULL)
+        *descriptor_end = current_descriptor_end;
+
+      return true;
+    }
+
+    pointer = current_descriptor_end;
+  }
+
+  return false;
+}
+
 // Count PAT program entries available in the cached PAT section.
 int si_count_pat_programs(struct dvb_data_s *dvb_data) {
   int section_end = psi_payload_end(dvb_data, PAT_PID, PAT_SECT_HEADER_LEN);
@@ -200,6 +233,24 @@ int pmt_stream_pid(struct dvb_data_s *dvb_data, int program_pid, int stream_inde
     return 0;
 
   return read_13_bit_pid(dvb_data->pid_data[program_pid].data, pointer + 1);
+}
+
+// Return the MPEG-TS stream_type for one PMT stream entry.
+int pmt_stream_type(struct dvb_data_s *dvb_data, int program_pid, int stream_index) {
+  int pointer;
+
+  if (!find_pmt_part(dvb_data, program_pid, stream_index, &pointer))
+    return -1;
+
+  return dvb_data->pid_data[program_pid].data[pointer];
+}
+
+// Return the PCR PID from the cached PMT section header.
+int pmt_pcr_pid(struct dvb_data_s *dvb_data, int program_pid) {
+  if (!demux_has_pid_data(dvb_data, program_pid, PMT_SECT_HEADER_LEN))
+    return -1;
+
+  return read_13_bit_pid(dvb_data->pid_data[program_pid].data, 8);
 }
 
 // Find the NIT PID by locating PAT program number 0.
@@ -301,46 +352,67 @@ int si_sdt_service_free_ca_mode(struct dvb_data_s *dvb_data, int service_index) 
   return (dvb_data->pid_data[SDT_PID].data[pointer + 3] >> 4) & 0x01;
 }
 
-// Extract the service descriptor name for one SDT service entry.
-int si_read_sdt_service_name(struct dvb_data_s *dvb_data, int service_index, char *service_name) {
-  int part_pointer;
-  int descriptor_loop_end;
+// Return the service_type from the SDT service descriptor.
+int si_sdt_service_type(struct dvb_data_s *dvb_data, int service_index) {
+  int descriptor_pointer;
+  int descriptor_end;
 
-  if (!find_sdt_part(dvb_data, service_index, &part_pointer, &descriptor_loop_end))
+  if (!find_sdt_service_descriptor(dvb_data, service_index, &descriptor_pointer, &descriptor_end))
+    return -1;
+
+  if (descriptor_pointer + 2 >= descriptor_end)
+    return -1;
+
+  return dvb_data->pid_data[SDT_PID].data[descriptor_pointer + 2];
+}
+
+// Extract the service provider name from one SDT service descriptor.
+int si_read_sdt_service_provider_name(struct dvb_data_s *dvb_data, int service_index, char *provider_name) {
+  int descriptor_pointer;
+  int descriptor_end;
+
+  if (!find_sdt_service_descriptor(dvb_data, service_index, &descriptor_pointer, &descriptor_end))
     return 0;
 
-  int descriptor_pointer = part_pointer + SDT_PART_SECT_LEN;
+  int provider_name_length_pos = descriptor_pointer + 3;
+  if (provider_name_length_pos >= descriptor_end)
+    return 0;
 
-  while (descriptor_pointer + 2 <= descriptor_loop_end) {
-    int descriptor_tag = dvb_data->pid_data[SDT_PID].data[descriptor_pointer];
-    int descriptor_length = dvb_data->pid_data[SDT_PID].data[descriptor_pointer + 1];
-    int descriptor_end = descriptor_pointer + 2 + descriptor_length;
-    if (descriptor_end > descriptor_loop_end)
-      return 0;
+  int provider_name_length = dvb_data->pid_data[SDT_PID].data[provider_name_length_pos];
+  if (provider_name_length_pos + 1 + provider_name_length > descriptor_end)
+    return 0;
 
-    if (descriptor_tag == SERVICE_DESCRIPTOR) {
-      int provider_name_length_pos = descriptor_pointer + 3;
-      if (provider_name_length_pos >= descriptor_end)
-        return 0;
+  if (provider_name_length > DEMUX_PROVIDER_NAME_SIZE - 1)
+    provider_name_length = DEMUX_PROVIDER_NAME_SIZE - 1;
+  memcpy(provider_name, &dvb_data->pid_data[SDT_PID].data[provider_name_length_pos + 1], provider_name_length);
 
-      int service_provider_name_length = dvb_data->pid_data[SDT_PID].data[provider_name_length_pos];
-      int service_name_length_pos = provider_name_length_pos + 1 + service_provider_name_length;
-      if (service_name_length_pos >= descriptor_end)
-        return 0;
+  return provider_name_length;
+}
 
-      int service_name_length = dvb_data->pid_data[SDT_PID].data[service_name_length_pos];
-      if (service_name_length_pos + 1 + service_name_length > descriptor_end)
-        return 0;
+// Extract the service descriptor name for one SDT service entry.
+int si_read_sdt_service_name(struct dvb_data_s *dvb_data, int service_index, char *service_name) {
+  int descriptor_pointer;
+  int descriptor_end;
 
-      if (service_name_length > DEMUX_SERVICE_NAME_SIZE - 1)
-        service_name_length = DEMUX_SERVICE_NAME_SIZE - 1;
-      memcpy(service_name, &dvb_data->pid_data[SDT_PID].data[service_name_length_pos + 1], service_name_length);
+  if (!find_sdt_service_descriptor(dvb_data, service_index, &descriptor_pointer, &descriptor_end))
+    return 0;
 
-      return service_name_length;
-    }
+  int provider_name_length_pos = descriptor_pointer + 3;
+  if (provider_name_length_pos >= descriptor_end)
+    return 0;
 
-    descriptor_pointer = descriptor_end;
-  }
+  int service_provider_name_length = dvb_data->pid_data[SDT_PID].data[provider_name_length_pos];
+  int service_name_length_pos = provider_name_length_pos + 1 + service_provider_name_length;
+  if (service_name_length_pos >= descriptor_end)
+    return 0;
 
-  return 0;
+  int service_name_length = dvb_data->pid_data[SDT_PID].data[service_name_length_pos];
+  if (service_name_length_pos + 1 + service_name_length > descriptor_end)
+    return 0;
+
+  if (service_name_length > DEMUX_SERVICE_NAME_SIZE - 1)
+    service_name_length = DEMUX_SERVICE_NAME_SIZE - 1;
+  memcpy(service_name, &dvb_data->pid_data[SDT_PID].data[service_name_length_pos + 1], service_name_length);
+
+  return service_name_length;
 }

@@ -7,8 +7,10 @@
 #define TS_MAX_PID 8191
 #define TS_PID_COUNT (TS_MAX_PID + 1)
 #define DEMUX_NETWORK_NAME_SIZE 100
+#define DEMUX_PROVIDER_NAME_SIZE 100
 #define DEMUX_SERVICE_NAME_SIZE 100
 #define DEMUX_MAX_SERVICES 256
+#define DEMUX_MAX_SERVICE_STREAMS 16
 
 // Raw PSI/SI section bytes cached per PID by the demux reader thread.
 struct pid_data_s {
@@ -29,13 +31,26 @@ struct dvb_data_s {
   volatile int stop_demux_thread;
 };
 
-// One named service from the SDT. Extra fields are kept for the future detail view.
+// One elementary stream copied from a service PMT.
+struct demux_stream_snapshot {
+  int pid;
+  int type;
+};
+
+// One named service from the SDT, including fields shown by the detail view.
 struct demux_service_snapshot {
   int service_id;
+  int service_type;
   int program_pid;
+  int pcr_pid;
+  int stream_count;
+  int stored_stream_count;
   int running_status;
   int free_ca_mode;
+  int provider_name_len;
   int name_len;
+  struct demux_stream_snapshot streams[DEMUX_MAX_SERVICE_STREAMS];
+  char provider_name[DEMUX_PROVIDER_NAME_SIZE];
   char name[DEMUX_SERVICE_NAME_SIZE];
 };
 
@@ -55,7 +70,7 @@ void join_dvb_reader(struct dvb_data_s *dvb_data);
 // Copy the current NIT/SDT display data into a standalone snapshot for rendering.
 int read_demux_snapshot(struct dvb_data_s *dvb_data, struct demux_snapshot *snapshot);
 
-// PMT helpers used by the future demux/service detail view.
+// PMT helpers used by the demux/service detail view.
 int count_pmt_streams(struct dvb_data_s *dvb_data, int program_pid);
 int pmt_stream_pid(struct dvb_data_s *dvb_data, int program_pid, int stream_index);
 

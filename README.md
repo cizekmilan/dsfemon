@@ -20,7 +20,7 @@ It shows a compact live overview of DVB tuner state in a terminal UI and is inte
 - displays DVB delivery system, frequency, bandwidth, symbol rate, FEC, and modulation
 - reads basic NIT/SDT demux information and shows network/service names
 - supports paging when many frontends are present
-- provides keyboard navigation and a scrollable demux service detail screen
+- provides keyboard navigation and a scrollable demux service detail screen with PMT/service status information
 
 ## ⌨️ Controls
 
@@ -90,21 +90,22 @@ Additional commands and useful arguments:
 /
 ├── docs/
 │   └── screenshots/
-│       └── dsfemon-main.png   # main application screenshot
-├── dsfemon.cpp                # main ncurses loop, paging, keyboard handling
-├── command_line.*             # command-line options
-├── device_discovery.*         # DVB device scanning and lifecycle
-├── frontend_monitor.*         # DVBv5 property collection
-├── frontend_status.*          # frontend status snapshot collection
-├── frontend_view.*            # frontend/status rendering
-├── demux_reader.cpp           # background PAT/PMT/NIT/SDT section reader
-├── demux_snapshot.cpp         # stable demux data copied for UI rendering
-├── demux_view.*               # demux/service summary rendering
-├── si_parser.cpp              # PSI/SI parser helpers
-├── *_table.h                  # small PSI/SI table constants
-├── ui_helpers.*               # shared ncurses rendering helpers
-├── ncurses_present.*          # terminal bar helpers
-└── color.*                    # ncurses color pairs/macros
+│       └── dsfemon-main.png      # main application screenshot
+├── dsfemon.cpp                   # main ncurses loop, paging, keyboard handling
+├── command_line.*                # command-line options
+├── device_discovery.*            # DVB device scanning and lifecycle
+├── frontend_monitor.*            # DVBv5 property collection
+├── frontend_status_cache.*       # background frontend status cache
+├── frontend_status.*             # frontend status snapshot collection
+├── frontend_view.*               # frontend/status rendering
+├── demux_reader.cpp              # background PAT/PMT/NIT/SDT section reader
+├── demux_snapshot.cpp            # stable demux data copied for UI rendering
+├── demux_view.*                  # demux/service summary rendering
+├── si_parser.cpp                 # PSI/SI parser helpers
+├── *_table.h                     # small PSI/SI table constants
+├── ui_helpers.*                  # shared ncurses rendering helpers
+├── ncurses_present.*             # terminal bar helpers
+└── color.*                       # ncurses color pairs/macros
 ```
 
 ## Status
@@ -113,7 +114,7 @@ Additional commands and useful arguments:
 - ✅ default adapter scan starts at adapter `0`
 - ✅ DVBv5 properties are read individually for better compatibility with older drivers
 - ✅ paging and keyboard navigation are implemented
-- ✅ demux detail shows a scrollable service table; detailed PMT/stream view is still planned
+- ✅ demux detail shows a scrollable service table with PMT PID, stream count, CA flag, and running status
 
 ## 🙏 Acknowledgements
 

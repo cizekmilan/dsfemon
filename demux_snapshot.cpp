@@ -60,9 +60,23 @@ int read_demux_snapshot(struct dvb_data_s *dvb_data, struct demux_snapshot *snap
       continue;
 
     service->service_id = si_sdt_service_id(dvb_data, service_index);
+    service->service_type = si_sdt_service_type(dvb_data, service_index);
     service->program_pid = si_find_program_pid(dvb_data, service->service_id);
+    service->pcr_pid = pmt_pcr_pid(dvb_data, service->program_pid);
+    service->stream_count = count_pmt_streams(dvb_data, service->program_pid);
+    service->stored_stream_count = service->stream_count;
+    if (service->stored_stream_count > DEMUX_MAX_SERVICE_STREAMS)
+      service->stored_stream_count = DEMUX_MAX_SERVICE_STREAMS;
+
+    for (int stream_index = 0; stream_index < service->stored_stream_count; stream_index++) {
+      service->streams[stream_index].pid = pmt_stream_pid(dvb_data, service->program_pid, stream_index);
+      service->streams[stream_index].type = pmt_stream_type(dvb_data, service->program_pid, stream_index);
+    }
+
     service->running_status = si_sdt_service_running_status(dvb_data, service_index);
     service->free_ca_mode = si_sdt_service_free_ca_mode(dvb_data, service_index);
+    service->provider_name_len = si_read_sdt_service_provider_name(dvb_data, service_index, service->provider_name);
+    service->provider_name_len = clean_si_text(service->provider_name, service->provider_name_len);
     snapshot->service_count++;
   }
 

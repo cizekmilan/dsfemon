@@ -16,6 +16,7 @@ SOURCES := \
 	si_parser.cpp \
 	device_discovery.cpp \
 	frontend_monitor.cpp \
+	frontend_status_cache.cpp \
 	frontend_status.cpp \
 	ui_helpers.cpp \
 	frontend_view.cpp \

@@ -14,8 +14,12 @@ int si_find_nit_pid(struct dvb_data_s *dvb_data);
 int si_read_nit_network_name(struct dvb_data_s *dvb_data, int program_pid, char *network_name);
 int si_count_sdt_services(struct dvb_data_s *dvb_data);
 int si_sdt_service_id(struct dvb_data_s *dvb_data, int service_index);
+int si_sdt_service_type(struct dvb_data_s *dvb_data, int service_index);
 int si_sdt_service_running_status(struct dvb_data_s *dvb_data, int service_index);
 int si_sdt_service_free_ca_mode(struct dvb_data_s *dvb_data, int service_index);
+int si_read_sdt_service_provider_name(struct dvb_data_s *dvb_data, int service_index, char *provider_name);
 int si_read_sdt_service_name(struct dvb_data_s *dvb_data, int service_index, char *service_name);
+int pmt_pcr_pid(struct dvb_data_s *dvb_data, int program_pid);
+int pmt_stream_type(struct dvb_data_s *dvb_data, int program_pid, int stream_index);
 
 #endif

@@ -3,7 +3,6 @@
 #include <signal.h>
 #include <string.h>
 #include <time.h>
-#include <unistd.h>
 
 #include <curses.h>
 
@@ -12,12 +11,12 @@
 #include "demux_monitor.h"
 #include "demux_view.h"
 #include "device_discovery.h"
-#include "frontend_status.h"
+#include "frontend_status_cache.h"
 #include "frontend_view.h"
 #include "ui_helpers.h"
 
-#define DSFEMON_VERSION "v0.71.2026"
-#define DSFEMON_TITLE "dsfemon - DVB frontend monitor, originally developed by David Seidl"
+#define DSFEMON_VERSION "v0.75"
+#define DSFEMON_TITLE "dsfemon - DVB frontend monitor"
 // Number of monitor refreshes between automatic rotations of long service lists.
 #define CHANNEL_ROTATION_REFRESHES 8
 // Lines used by one complete frontend block: frontend rows, demux row, detail row, and separator.
@@ -28,13 +27,17 @@
 #define HEADER_GAP_LINES 1
 // The last row is reserved for keyboard help.
 #define FOOTER_BAR_LINES 1
-// Main monitor refresh cadence.
+// Empty row between detail metadata and the service table header.
+#define DETAIL_TABLE_GAP_LINES 1
+// Selected-service metadata rows shown above the detail table.
+#define DETAIL_SELECTED_SUMMARY_LINES 2
+// Main UI refresh cadence.
 #define REFRESH_INTERVAL_US 500000
 // Keyboard polling cadence. Lower than DVB refresh so navigation feels immediate.
 #define INPUT_POLL_INTERVAL_US 25000
-// Delay expensive frontend reads briefly after a keypress so navigation redraws first.
-#define KEY_REFRESH_DEFER_US 100000
-// Keep standalone Esc responsive while still allowing arrow-key escape sequences.
+// Extra wait used only to distinguish standalone Esc from terminal key sequences.
+#define ESC_SEQUENCE_TIMEOUT_MS 80
+// Keep standalone Esc responsive while still allowing terminal key sequences.
 #define ESC_KEY_DELAY_MS 50
 
 static volatile sig_atomic_t g_stop_requested = 0;
@@ -53,12 +56,6 @@ struct screen_state {
   unsigned int detail_scroll_offset;
   unsigned int detail_service_count;
   unsigned int detail_page_capacity;
-};
-
-// Cached frontend status used for fast keyboard-only redraws.
-struct frontend_status_cache_entry {
-  bool valid;
-  struct frontend_status_snapshot snapshot;
 };
 
 // Async-signal-safe stop request consumed by the main loop.
@@ -102,12 +99,41 @@ static bool enter_key(int key) {
   return key == '\n' || key == '\r' || key == KEY_ENTER;
 }
 
-// Leave a temporary detail screen without quitting the whole program.
-static bool detail_back_key(int key) {
-  return key == 27 || key == KEY_BACKSPACE;
+// Restore the normal input polling timeout after short local timeout changes.
+static void restore_input_timeout(void) {
+  timeout(INPUT_POLL_INTERVAL_US / 1000);
 }
 
-// Monotonic microsecond clock used to decouple input polling from DVB redraws.
+// Detect keys such as Home/End that arrive as Esc-prefixed terminal sequences.
+static bool escape_sequence_follows(void) {
+  timeout(ESC_SEQUENCE_TIMEOUT_MS);
+  int next_key = getch();
+  if (next_key == ERR) {
+    restore_input_timeout();
+
+    return false;
+  }
+
+  timeout(0);
+  while (getch() != ERR) {
+  }
+  restore_input_timeout();
+
+  return true;
+}
+
+// Leave the detail screen without treating Home/End escape sequences as Esc.
+static bool detail_back_key(int key) {
+  if (key == KEY_BACKSPACE)
+    return true;
+
+  if (key != 27)
+    return false;
+
+  return !escape_sequence_follows();
+}
+
+// Monotonic microsecond clock used to schedule UI redraws independently of input polling.
 static unsigned long long monotonic_time_us(void) {
   struct timespec now;
 
@@ -202,6 +228,46 @@ static const char *running_status_name(int running_status) {
   }
 }
 
+// Keep running-state coloring readable inside the detail table.
+static void detail_status_color_on(int running_status) {
+  switch (running_status) {
+    case 4:
+      GREEN_BOLD_ON;
+      break;
+    case 1:
+    case 5:
+      RED_ON;
+      break;
+    case 2:
+    case 3:
+      YELLOW_ON;
+      break;
+    default:
+      WHITE_ON;
+      break;
+  }
+}
+
+// Turn off the color enabled for one running-state value.
+static void detail_status_color_off(int running_status) {
+  switch (running_status) {
+    case 4:
+      GREEN_BOLD_OFF;
+      break;
+    case 1:
+    case 5:
+      RED_OFF;
+      break;
+    case 2:
+    case 3:
+      YELLOW_OFF;
+      break;
+    default:
+      WHITE_OFF;
+      break;
+  }
+}
+
 // Keep the selected service and scroll offset valid for the current detail table.
 static void clamp_detail_service_selection(struct screen_state *state) {
   if (state->detail_service_count == 0) {
@@ -250,56 +316,7 @@ static struct screen_state init_screen_state(void) {
   return state;
 }
 
-// Refresh one opened frontend cache entry from the kernel/driver.
-static void refresh_frontend_status_cache_entry(struct dvb_data_s *dvb_data, struct frontend_status_cache_entry *cache_entry) {
-  if (dvb_data == NULL || cache_entry == NULL || dvb_data->fefd < 0) {
-    if (cache_entry != NULL)
-      cache_entry->valid = false;
-
-    return;
-  }
-
-  cache_entry->valid = read_frontend_status_snapshot(dvb_data->fefd, &cache_entry->snapshot) == 0;
-}
-
-// Keep only the current monitor page fresh; key-only redraws reuse these values.
-static void refresh_visible_frontend_status_cache(struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, const struct screen_state *state, struct frontend_status_cache_entry *status_cache) {
-  if (state->detail_open || state->page_capacity == 0)
-    return;
-
-  unsigned int frontend_index = 0;
-  unsigned int first_frontend = state->current_page * state->page_capacity;
-  unsigned int last_frontend = first_frontend + state->page_capacity;
-
-  for (int adapter = scan_config->min_adapter; adapter < scan_config->max_adapter; adapter++) {
-    if (!dvb_scan_adapter_enabled(scan_config, adapter))
-      continue;
-
-    for (int subadapter = 0; subadapter < scan_config->max_subadapter; subadapter++) {
-      int device_index = dvb_device_index(adapter, subadapter, scan_config->max_subadapter);
-      struct dvb_data_s *current_dvb_data = &dvb_data[device_index];
-      if (current_dvb_data->fefd < 0)
-        continue;
-
-      if (frontend_index >= first_frontend && frontend_index < last_frontend)
-        refresh_frontend_status_cache_entry(current_dvb_data, &status_cache[device_index]);
-
-      frontend_index++;
-    }
-  }
-}
-
-// Return the cached frontend snapshot, falling back to an empty one before the first refresh.
-static const struct frontend_status_snapshot *cached_frontend_status(struct frontend_status_cache_entry *status_cache, int device_index) {
-  static const struct frontend_status_snapshot empty_status = {};
-
-  if (status_cache[device_index].valid)
-    return &status_cache[device_index].snapshot;
-
-  return &empty_status;
-}
-
-// Render one frontend block: frontend rows, demux summary, and detail placeholder.
+// Render one frontend block: frontend rows, demux summary, and detail entry.
 static unsigned int render_frontend(struct dvb_data_s *dvb_data, const struct frontend_status_snapshot *frontend_status, int adapter, int subadapter, unsigned int card_count, unsigned int selected_frontend, unsigned int line, unsigned int refresh_cycle) {
   char fedev[128];
 
@@ -317,7 +334,7 @@ static unsigned int render_frontend(struct dvb_data_s *dvb_data, const struct fr
 }
 
 // Render only complete frontend blocks that belong to the requested page.
-static unsigned int render_frontend_page(struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, struct frontend_status_cache_entry *status_cache, unsigned int page, unsigned int page_capacity, unsigned int selected_frontend, unsigned int first_line, unsigned int refresh_cycle) {
+static unsigned int render_frontend_page(struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, struct frontend_status_cache *status_cache, unsigned int page, unsigned int page_capacity, unsigned int selected_frontend, unsigned int first_line, unsigned int refresh_cycle) {
   unsigned int line = first_line;
   unsigned int frontend_index = 0;
   unsigned int first_frontend = page * page_capacity;
@@ -337,8 +354,9 @@ static unsigned int render_frontend_page(struct dvb_data_s *dvb_data, const stru
         continue;
 
       if (frontend_index >= first_frontend && frontend_index < last_frontend) {
-        const struct frontend_status_snapshot *frontend_status = cached_frontend_status(status_cache, device_index);
-        line = render_frontend(current_dvb_data, frontend_status, adapter, subadapter, frontend_index, selected_frontend, line, refresh_cycle);
+        struct frontend_status_snapshot frontend_status;
+        copy_frontend_status_cache_snapshot(status_cache, device_index, &frontend_status);
+        line = render_frontend(current_dvb_data, &frontend_status, adapter, subadapter, frontend_index, selected_frontend, line, refresh_cycle);
       }
 
       frontend_index++;
@@ -371,51 +389,244 @@ static struct dvb_data_s *frontend_by_index(struct dvb_data_s *dvb_data, const s
   return NULL;
 }
 
+// Convert DVB service_type values into short labels suitable for a compact table.
+static void format_service_type(int service_type, char *buffer, size_t buffer_size) {
+  switch (service_type) {
+    case 0x01:
+      snprintf(buffer, buffer_size, "TV");
+      break;
+    case 0x02:
+      snprintf(buffer, buffer_size, "Radio");
+      break;
+    case 0x03:
+      snprintf(buffer, buffer_size, "Text");
+      break;
+    case 0x0c:
+      snprintf(buffer, buffer_size, "Data");
+      break;
+    case 0x11:
+      snprintf(buffer, buffer_size, "MPEG2HD");
+      break;
+    case 0x16:
+      snprintf(buffer, buffer_size, "H264 SD");
+      break;
+    case 0x19:
+      snprintf(buffer, buffer_size, "H264 HD");
+      break;
+    case 0x1f:
+      snprintf(buffer, buffer_size, "HEVC");
+      break;
+    case 0x20:
+      snprintf(buffer, buffer_size, "HEVC 4K");
+      break;
+    default:
+      if (service_type >= 0)
+        snprintf(buffer, buffer_size, "0x%02x", service_type);
+      else
+        snprintf(buffer, buffer_size, "-");
+      break;
+  }
+}
+
+// Convert PMT stream_type values into compact names for the selected-service summary.
+static void format_stream_type(int stream_type, char *buffer, size_t buffer_size) {
+  switch (stream_type) {
+    case 0x01:
+      snprintf(buffer, buffer_size, "MPEG1 video");
+      break;
+    case 0x02:
+      snprintf(buffer, buffer_size, "MPEG2 video");
+      break;
+    case 0x03:
+    case 0x04:
+      snprintf(buffer, buffer_size, "MPEG audio");
+      break;
+    case 0x06:
+      snprintf(buffer, buffer_size, "private");
+      break;
+    case 0x0f:
+      snprintf(buffer, buffer_size, "AAC audio");
+      break;
+    case 0x11:
+      snprintf(buffer, buffer_size, "LATM AAC");
+      break;
+    case 0x1b:
+      snprintf(buffer, buffer_size, "H264 video");
+      break;
+    case 0x24:
+      snprintf(buffer, buffer_size, "HEVC video");
+      break;
+    default:
+      if (stream_type >= 0)
+        snprintf(buffer, buffer_size, "0x%02x", stream_type);
+      else
+        snprintf(buffer, buffer_size, "-");
+      break;
+  }
+}
+
+// Append formatted stream text while keeping the summary safely terminated.
+static void append_stream_summary_text(char *buffer, size_t buffer_size, size_t *used, const char *text) {
+  if (buffer_size == 0 || used == NULL)
+    return;
+
+  if (*used >= buffer_size - 1)
+    return;
+
+  int written = snprintf(buffer + *used, buffer_size - *used, "%s", text);
+  if (written < 0)
+    return;
+
+  if ((size_t)written >= buffer_size - *used)
+    *used = buffer_size - 1;
+  else
+    *used += written;
+}
+
+// Build a compact PMT stream list for the selected service.
+static void format_stream_summary(const struct demux_service_snapshot *service, char *buffer, size_t buffer_size) {
+  size_t used = 0;
+
+  if (buffer_size == 0)
+    return;
+
+  buffer[0] = '\0';
+  append_stream_summary_text(buffer, buffer_size, &used, "Streams:");
+
+  if (service->stream_count <= 0) {
+    append_stream_summary_text(buffer, buffer_size, &used, " waiting for PMT data");
+
+    return;
+  }
+
+  for (int stream_index = 0; stream_index < service->stored_stream_count; stream_index++) {
+    char stream_type_text[24];
+    char stream_text[80];
+
+    format_stream_type(service->streams[stream_index].type, stream_type_text, sizeof(stream_type_text));
+    if (stream_index > 0)
+      append_stream_summary_text(buffer, buffer_size, &used, " |");
+
+    snprintf(stream_text, sizeof(stream_text), " %d %s", service->streams[stream_index].pid, stream_type_text);
+    append_stream_summary_text(buffer, buffer_size, &used, stream_text);
+  }
+
+  if (service->stream_count > service->stored_stream_count) {
+    char more_text[32];
+
+    snprintf(more_text, sizeof(more_text), " | +%d more", service->stream_count - service->stored_stream_count);
+    append_stream_summary_text(buffer, buffer_size, &used, more_text);
+  }
+}
+
 // Print one service table row, clipping the service name to the terminal width.
 static void render_service_table_row(unsigned int line, int col, unsigned int service_index, const struct demux_service_snapshot *service, bool selected) {
   char service_id_text[16];
+  char service_type_text[16];
   char program_pid_text[16];
-  char row_text[DEMUX_SERVICE_NAME_SIZE + 80];
+  char stream_count_text[16];
 
   if (service->service_id >= 0)
     snprintf(service_id_text, sizeof(service_id_text), "%d", service->service_id);
   else
     snprintf(service_id_text, sizeof(service_id_text), "-");
 
+  format_service_type(service->service_type, service_type_text, sizeof(service_type_text));
+
   if (service->program_pid >= 0)
     snprintf(program_pid_text, sizeof(program_pid_text), "%d", service->program_pid);
   else
     snprintf(program_pid_text, sizeof(program_pid_text), "-");
 
-  snprintf(row_text, sizeof(row_text), "%3u  %-5s  %-7s  %-3s %-8s  %s",
-           service_index + 1,
-           service_id_text,
-           program_pid_text,
-           service->free_ca_mode ? "yes" : "no",
-           running_status_name(service->running_status),
-           service->name);
+  if (service->stream_count > 0)
+    snprintf(stream_count_text, sizeof(stream_count_text), "%d", service->stream_count);
+  else
+    snprintf(stream_count_text, sizeof(stream_count_text), "-");
 
   if (selected)
     attron(A_REVERSE);
 
   mvhline(line, 0, ' ', col);
-  if (col > 0)
-    mvaddnstr(line, 0, row_text, col);
+  move(line, 0);
+  printw("%3u   %-5s   %-7s   %-7s   %-7s   ", service_index + 1, service_id_text, service_type_text, program_pid_text, stream_count_text);
+
+  if (!selected && service->free_ca_mode)
+    YELLOW_BOLD_ON;
+  else if (!selected)
+    GREEN_ON;
+  printw("%-3s", service->free_ca_mode ? "yes" : "no");
+  if (!selected && service->free_ca_mode)
+    YELLOW_BOLD_OFF;
+  else if (!selected)
+    GREEN_OFF;
+
+  printw("   ");
+  if (!selected)
+    detail_status_color_on(service->running_status);
+  printw("%-8s", running_status_name(service->running_status));
+  if (!selected)
+    detail_status_color_off(service->running_status);
+  printw("   ");
+
+  int y, x;
+  getyx(stdscr, y, x);
+  (void)y;
+
+  int remaining_cols = col - x;
+  if (remaining_cols > 0)
+    addnstr(service->name, remaining_cols);
 
   if (selected)
     attroff(A_REVERSE);
 }
 
+// Show extra data for the currently selected service without crowding each row.
+static unsigned int render_selected_service_summary(const struct screen_state *state, const struct demux_snapshot *snapshot, unsigned int line, int col) {
+  if (snapshot->service_count <= 0 || state->detail_selected_service >= (unsigned int)snapshot->service_count)
+    return line;
+
+  const struct demux_service_snapshot *service = &snapshot->services[state->detail_selected_service];
+  char service_type_text[16];
+  char pcr_pid_text[16];
+  char summary[512];
+  char stream_summary[512];
+
+  format_service_type(service->service_type, service_type_text, sizeof(service_type_text));
+
+  if (service->pcr_pid >= 0)
+    snprintf(pcr_pid_text, sizeof(pcr_pid_text), "%d", service->pcr_pid);
+  else
+    snprintf(pcr_pid_text, sizeof(pcr_pid_text), "-");
+
+  snprintf(summary, sizeof(summary), "Selected: %s | Type: %s | Provider: %s | PCR PID: %s",
+           service->name,
+           service_type_text,
+           service->provider_name_len > 0 ? service->provider_name : "-",
+           pcr_pid_text);
+  format_stream_summary(service, stream_summary, sizeof(stream_summary));
+
+  move(line++, 0);
+  mvaddnstr(line - 1, 0, summary, col);
+  full_line();
+  move(line++, 0);
+  mvaddnstr(line - 1, 0, stream_summary, col);
+  full_line();
+
+  return line;
+}
+
 // Render the current service table viewport for the selected frontend.
 static unsigned int render_service_table(struct screen_state *state, const struct demux_snapshot *snapshot, unsigned int line, int footer_row) {
   int row, col;
+  char table_header[160];
   getmaxyx(stdscr, row, col);
   (void)row;
 
   if (line >= (unsigned int)footer_row)
     return line;
 
-  int table_rows = footer_row - (int)line - 2;
+  int selected_summary_lines = snapshot->service_count > 0 ? DETAIL_SELECTED_SUMMARY_LINES : 0;
+  int table_rows = footer_row - (int)line - 2 - DETAIL_TABLE_GAP_LINES - selected_summary_lines;
   state->detail_service_count = snapshot->service_count;
   state->detail_page_capacity = table_rows > 0 ? table_rows : 0;
   clamp_detail_service_selection(state);
@@ -439,12 +650,31 @@ static unsigned int render_service_table(struct screen_state *state, const struc
     return line;
   }
 
+  line = render_selected_service_summary(state, snapshot, line, col);
+
   if (line >= (unsigned int)footer_row)
     return line;
 
+  for (int i = 0; i < DETAIL_TABLE_GAP_LINES && line < (unsigned int)footer_row; i++) {
+    move(line++, 0);
+    full_line();
+  }
+
+  if (line >= (unsigned int)footer_row)
+    return line;
+
+  snprintf(table_header, sizeof(table_header), "%3s   %-5s   %-7s   %-7s   %-7s   %-3s   %-8s   %s",
+           "No",
+           "SID",
+           "Type",
+           "PMT PID",
+           "Streams",
+           "CA",
+           "Status",
+           "Service");
   attron(A_REVERSE);
   mvhline(line, 0, ' ', col);
-  mvaddnstr(line, 0, " No   SID    PMT PID  CA  Status    Service", col);
+  mvaddnstr(line, 0, table_header, col);
   attroff(A_REVERSE);
   line++;
 
@@ -629,7 +859,7 @@ static void update_screen_state(struct screen_state *state, struct dvb_data_s *d
 }
 
 // Render the content area between the fixed header and footer bars.
-static unsigned int render_screen_body(struct screen_state *state, struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, struct frontend_status_cache_entry *status_cache, unsigned int line, int footer_row) {
+static unsigned int render_screen_body(struct screen_state *state, struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, struct frontend_status_cache *status_cache, unsigned int line, int footer_row) {
   if (state->detail_open && line < (unsigned int)footer_row)
     return render_demux_detail(state, dvb_data, scan_config, line, footer_row);
 
@@ -649,14 +879,11 @@ static unsigned int render_screen_body(struct screen_state *state, struct dvb_da
 }
 
 // Draw one complete screen frame and flush it once after all rows are updated.
-static void render_screen(struct screen_state *state, struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, struct frontend_status_cache_entry *status_cache, bool update_frontend_status) {
+static void render_screen(struct screen_state *state, struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, struct frontend_status_cache *status_cache) {
   int row, col;
   getmaxyx(stdscr, row, col);
 
   update_screen_state(state, dvb_data, scan_config, row);
-
-  if (update_frontend_status)
-    refresh_visible_frontend_status_cache(dvb_data, scan_config, state, status_cache);
 
   unsigned int line = HEADER_BAR_LINES + HEADER_GAP_LINES;
   int footer_row = row > 0 ? row - 1 : 0;
@@ -828,17 +1055,27 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  struct frontend_status_cache_entry *status_cache = (frontend_status_cache_entry *)calloc(DVB_DEVICE_COUNT, sizeof(*status_cache));
+  init_dvb_devices(dvb_data, DVB_DEVICE_COUNT);
+  discover_dvb_devices(dvb_data, DVB_DEVICE_COUNT, &scan_config);
+
+  struct frontend_status_cache *status_cache = create_frontend_status_cache(dvb_data, DVB_DEVICE_COUNT);
 
   if (status_cache == NULL) {
     endwin();
     fprintf(stderr, "Cannot allocate frontend status cache\n");
+    cleanup_dvb_devices(dvb_data, DVB_DEVICE_COUNT);
     free(dvb_data);
     return 1;
   }
 
-  init_dvb_devices(dvb_data, DVB_DEVICE_COUNT);
-  discover_dvb_devices(dvb_data, DVB_DEVICE_COUNT, &scan_config);
+  if (start_frontend_status_cache(status_cache) != 0) {
+    endwin();
+    fprintf(stderr, "Cannot start frontend status worker\n");
+    destroy_frontend_status_cache(status_cache);
+    cleanup_dvb_devices(dvb_data, DVB_DEVICE_COUNT);
+    free(dvb_data);
+    return 1;
+  }
 
   bool running = true;
   struct screen_state screen = init_screen_state();
@@ -850,7 +1087,6 @@ int main(int argc, char **argv) {
     if (g_stop_requested)
       running = false;
 
-    bool handled_key = false;
     int key = getch();
     if (key != ERR) {
       if (screen.detail_open)
@@ -858,7 +1094,6 @@ int main(int argc, char **argv) {
       else
         handle_monitor_key(key, &running, &screen);
 
-      handled_key = true;
       screen.redraw_requested = true;
     }
 
@@ -866,17 +1101,12 @@ int main(int argc, char **argv) {
     bool refresh_due = now_us >= next_refresh_time_us;
 
     if (screen.redraw_requested || refresh_due) {
-      bool update_frontend_status = refresh_due && !handled_key;
-      render_screen(&screen, dvb_data, &scan_config, status_cache, update_frontend_status);
+      render_screen(&screen, dvb_data, &scan_config, status_cache);
       screen.redraw_requested = false;
 
       if (refresh_due) {
-        if (handled_key) {
-          next_refresh_time_us = monotonic_time_us() + KEY_REFRESH_DEFER_US;
-        } else {
-          screen.refresh_cycle++;
-          next_refresh_time_us = monotonic_time_us() + REFRESH_INTERVAL_US;
-        }
+        screen.refresh_cycle++;
+        next_refresh_time_us = monotonic_time_us() + REFRESH_INTERVAL_US;
       }
     }
 
@@ -884,8 +1114,8 @@ int main(int argc, char **argv) {
       running = false;
   }
 
+  destroy_frontend_status_cache(status_cache);
   cleanup_dvb_devices(dvb_data, DVB_DEVICE_COUNT);
-  free(status_cache);
   free(dvb_data);
   curs_set(1);
   endwin();
