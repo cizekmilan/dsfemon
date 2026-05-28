@@ -6,7 +6,6 @@
 #include <stdio.h>
 
 #include "color.h"
-#include "frontend_status.h"
 #include "ncurses_present.h"
 #include "ui_helpers.h"
 
@@ -431,23 +430,19 @@ static int device_fe_param_line(const struct frontend_status_snapshot *snapshot)
 }
 
 // Render all frontend-only rows and return the next free screen line.
-unsigned int render_frontend_status_lines(int frontend_fd, const char *frontend_path, unsigned int line) {
-  struct frontend_status_snapshot frontend_status;
-
-  read_frontend_status_snapshot(frontend_fd, &frontend_status);
-
+unsigned int render_frontend_status_lines(const struct frontend_status_snapshot *frontend_status, const char *frontend_path, unsigned int line) {
   move(line, 0);
-  line += device_info_line(&frontend_status, frontend_path);
+  line += device_info_line(frontend_status, frontend_path);
   move(line, 0);
-  line += device_status_line(&frontend_status);
+  line += device_status_line(frontend_status);
   move(line, 0);
-  line += device_signal_line(&frontend_status);
+  line += device_signal_line(frontend_status);
   move(line, 0);
-  line += device_snr_line(&frontend_status);
+  line += device_snr_line(frontend_status);
   move(line, 0);
-  line += device_ber_block_line(&frontend_status);
+  line += device_ber_block_line(frontend_status);
   move(line, 0);
-  line += device_fe_param_line(&frontend_status);
+  line += device_fe_param_line(frontend_status);
 
   return line;
 }

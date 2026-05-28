@@ -12,6 +12,7 @@
 #include "demux_monitor.h"
 #include "demux_view.h"
 #include "device_discovery.h"
+#include "frontend_status.h"
 #include "frontend_view.h"
 #include "ui_helpers.h"
 
@@ -31,6 +32,8 @@
 #define REFRESH_INTERVAL_US 500000
 // Keyboard polling cadence. Lower than DVB refresh so navigation feels immediate.
 #define INPUT_POLL_INTERVAL_US 25000
+// Delay expensive frontend reads briefly after a keypress so navigation redraws first.
+#define KEY_REFRESH_DEFER_US 100000
 // Keep standalone Esc responsive while still allowing arrow-key escape sequences.
 #define ESC_KEY_DELAY_MS 50
 
@@ -50,6 +53,12 @@ struct screen_state {
   unsigned int detail_scroll_offset;
   unsigned int detail_service_count;
   unsigned int detail_page_capacity;
+};
+
+// Cached frontend status used for fast keyboard-only redraws.
+struct frontend_status_cache_entry {
+  bool valid;
+  struct frontend_status_snapshot snapshot;
 };
 
 // Async-signal-safe stop request consumed by the main loop.
@@ -241,13 +250,62 @@ static struct screen_state init_screen_state(void) {
   return state;
 }
 
+// Refresh one opened frontend cache entry from the kernel/driver.
+static void refresh_frontend_status_cache_entry(struct dvb_data_s *dvb_data, struct frontend_status_cache_entry *cache_entry) {
+  if (dvb_data == NULL || cache_entry == NULL || dvb_data->fefd < 0) {
+    if (cache_entry != NULL)
+      cache_entry->valid = false;
+
+    return;
+  }
+
+  cache_entry->valid = read_frontend_status_snapshot(dvb_data->fefd, &cache_entry->snapshot) == 0;
+}
+
+// Keep only the current monitor page fresh; key-only redraws reuse these values.
+static void refresh_visible_frontend_status_cache(struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, const struct screen_state *state, struct frontend_status_cache_entry *status_cache) {
+  if (state->detail_open || state->page_capacity == 0)
+    return;
+
+  unsigned int frontend_index = 0;
+  unsigned int first_frontend = state->current_page * state->page_capacity;
+  unsigned int last_frontend = first_frontend + state->page_capacity;
+
+  for (int adapter = scan_config->min_adapter; adapter < scan_config->max_adapter; adapter++) {
+    if (!dvb_scan_adapter_enabled(scan_config, adapter))
+      continue;
+
+    for (int subadapter = 0; subadapter < scan_config->max_subadapter; subadapter++) {
+      int device_index = dvb_device_index(adapter, subadapter, scan_config->max_subadapter);
+      struct dvb_data_s *current_dvb_data = &dvb_data[device_index];
+      if (current_dvb_data->fefd < 0)
+        continue;
+
+      if (frontend_index >= first_frontend && frontend_index < last_frontend)
+        refresh_frontend_status_cache_entry(current_dvb_data, &status_cache[device_index]);
+
+      frontend_index++;
+    }
+  }
+}
+
+// Return the cached frontend snapshot, falling back to an empty one before the first refresh.
+static const struct frontend_status_snapshot *cached_frontend_status(struct frontend_status_cache_entry *status_cache, int device_index) {
+  static const struct frontend_status_snapshot empty_status = {};
+
+  if (status_cache[device_index].valid)
+    return &status_cache[device_index].snapshot;
+
+  return &empty_status;
+}
+
 // Render one frontend block: frontend rows, demux summary, and detail placeholder.
-static unsigned int render_frontend(struct dvb_data_s *dvb_data, int adapter, int subadapter, unsigned int card_count, unsigned int selected_frontend, unsigned int line, unsigned int refresh_cycle) {
+static unsigned int render_frontend(struct dvb_data_s *dvb_data, const struct frontend_status_snapshot *frontend_status, int adapter, int subadapter, unsigned int card_count, unsigned int selected_frontend, unsigned int line, unsigned int refresh_cycle) {
   char fedev[128];
 
   format_frontend_path(fedev, sizeof(fedev), adapter, subadapter);
 
-  line = render_frontend_status_lines(dvb_data->fefd, fedev, line);
+  line = render_frontend_status_lines(frontend_status, fedev, line);
   move(line, 0);
   line += demux_main_info(dvb_data, (refresh_cycle / CHANNEL_ROTATION_REFRESHES) + card_count);
   move(line, 0);
@@ -259,7 +317,7 @@ static unsigned int render_frontend(struct dvb_data_s *dvb_data, int adapter, in
 }
 
 // Render only complete frontend blocks that belong to the requested page.
-static unsigned int render_frontend_page(struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, unsigned int page, unsigned int page_capacity, unsigned int selected_frontend, unsigned int first_line, unsigned int refresh_cycle) {
+static unsigned int render_frontend_page(struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, struct frontend_status_cache_entry *status_cache, unsigned int page, unsigned int page_capacity, unsigned int selected_frontend, unsigned int first_line, unsigned int refresh_cycle) {
   unsigned int line = first_line;
   unsigned int frontend_index = 0;
   unsigned int first_frontend = page * page_capacity;
@@ -273,12 +331,15 @@ static unsigned int render_frontend_page(struct dvb_data_s *dvb_data, const stru
       continue;
 
     for (int subadapter = 0; subadapter < scan_config->max_subadapter; subadapter++) {
-      struct dvb_data_s *current_dvb_data = &dvb_data[dvb_device_index(adapter, subadapter, scan_config->max_subadapter)];
+      int device_index = dvb_device_index(adapter, subadapter, scan_config->max_subadapter);
+      struct dvb_data_s *current_dvb_data = &dvb_data[device_index];
       if (current_dvb_data->fefd < 0)
         continue;
 
-      if (frontend_index >= first_frontend && frontend_index < last_frontend)
-        line = render_frontend(current_dvb_data, adapter, subadapter, frontend_index, selected_frontend, line, refresh_cycle);
+      if (frontend_index >= first_frontend && frontend_index < last_frontend) {
+        const struct frontend_status_snapshot *frontend_status = cached_frontend_status(status_cache, device_index);
+        line = render_frontend(current_dvb_data, frontend_status, adapter, subadapter, frontend_index, selected_frontend, line, refresh_cycle);
+      }
 
       frontend_index++;
     }
@@ -568,7 +629,7 @@ static void update_screen_state(struct screen_state *state, struct dvb_data_s *d
 }
 
 // Render the content area between the fixed header and footer bars.
-static unsigned int render_screen_body(struct screen_state *state, struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, unsigned int line, int footer_row) {
+static unsigned int render_screen_body(struct screen_state *state, struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, struct frontend_status_cache_entry *status_cache, unsigned int line, int footer_row) {
   if (state->detail_open && line < (unsigned int)footer_row)
     return render_demux_detail(state, dvb_data, scan_config, line, footer_row);
 
@@ -584,15 +645,18 @@ static unsigned int render_screen_body(struct screen_state *state, struct dvb_da
   if (state->page_capacity == 0)
     return render_terminal_too_small_line(line);
 
-  return render_frontend_page(dvb_data, scan_config, state->current_page, state->page_capacity, state->selected_frontend, line, state->refresh_cycle);
+  return render_frontend_page(dvb_data, scan_config, status_cache, state->current_page, state->page_capacity, state->selected_frontend, line, state->refresh_cycle);
 }
 
 // Draw one complete screen frame and flush it once after all rows are updated.
-static void render_screen(struct screen_state *state, struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config) {
+static void render_screen(struct screen_state *state, struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, struct frontend_status_cache_entry *status_cache, bool update_frontend_status) {
   int row, col;
   getmaxyx(stdscr, row, col);
 
   update_screen_state(state, dvb_data, scan_config, row);
+
+  if (update_frontend_status)
+    refresh_visible_frontend_status_cache(dvb_data, scan_config, state, status_cache);
 
   unsigned int line = HEADER_BAR_LINES + HEADER_GAP_LINES;
   int footer_row = row > 0 ? row - 1 : 0;
@@ -606,7 +670,7 @@ static void render_screen(struct screen_state *state, struct dvb_data_s *dvb_dat
     }
   }
 
-  line = render_screen_body(state, dvb_data, scan_config, line, footer_row);
+  line = render_screen_body(state, dvb_data, scan_config, status_cache, line, footer_row);
 
   for (int i = line; i < footer_row; i++) {
     move(i, 0);
@@ -764,6 +828,15 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  struct frontend_status_cache_entry *status_cache = (frontend_status_cache_entry *)calloc(DVB_DEVICE_COUNT, sizeof(*status_cache));
+
+  if (status_cache == NULL) {
+    endwin();
+    fprintf(stderr, "Cannot allocate frontend status cache\n");
+    free(dvb_data);
+    return 1;
+  }
+
   init_dvb_devices(dvb_data, DVB_DEVICE_COUNT);
   discover_dvb_devices(dvb_data, DVB_DEVICE_COUNT, &scan_config);
 
@@ -777,19 +850,7 @@ int main(int argc, char **argv) {
     if (g_stop_requested)
       running = false;
 
-    unsigned long long now_us = monotonic_time_us();
-    bool refresh_due = now_us >= next_refresh_time_us;
-
-    if (screen.redraw_requested || refresh_due) {
-      render_screen(&screen, dvb_data, &scan_config);
-      screen.redraw_requested = false;
-
-      if (refresh_due) {
-        screen.refresh_cycle++;
-        next_refresh_time_us = monotonic_time_us() + REFRESH_INTERVAL_US;
-      }
-    }
-
+    bool handled_key = false;
     int key = getch();
     if (key != ERR) {
       if (screen.detail_open)
@@ -797,7 +858,26 @@ int main(int argc, char **argv) {
       else
         handle_monitor_key(key, &running, &screen);
 
+      handled_key = true;
       screen.redraw_requested = true;
+    }
+
+    unsigned long long now_us = monotonic_time_us();
+    bool refresh_due = now_us >= next_refresh_time_us;
+
+    if (screen.redraw_requested || refresh_due) {
+      bool update_frontend_status = refresh_due && !handled_key;
+      render_screen(&screen, dvb_data, &scan_config, status_cache, update_frontend_status);
+      screen.redraw_requested = false;
+
+      if (refresh_due) {
+        if (handled_key) {
+          next_refresh_time_us = monotonic_time_us() + KEY_REFRESH_DEFER_US;
+        } else {
+          screen.refresh_cycle++;
+          next_refresh_time_us = monotonic_time_us() + REFRESH_INTERVAL_US;
+        }
+      }
     }
 
     if (g_stop_requested)
@@ -805,6 +885,7 @@ int main(int argc, char **argv) {
   }
 
   cleanup_dvb_devices(dvb_data, DVB_DEVICE_COUNT);
+  free(status_cache);
   free(dvb_data);
   curs_set(1);
   endwin();
