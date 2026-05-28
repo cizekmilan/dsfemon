@@ -1,3 +1,13 @@
+/*
+ * dsfemon - DVB frontend monitor for Linux
+ *
+ * 2012: Originally developed as Femon by David Seidl.
+ * 2026: Modernized, refactored, and extended as dsfemon by Milan Cizek.
+ *
+ * Continued with permission from the original author under the condition
+ * that open-source principles are preserved.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
