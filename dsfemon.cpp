@@ -792,6 +792,28 @@ static unsigned int render_service_table(struct screen_state *state, const struc
   return line;
 }
 
+// Keep the last useful detail snapshot visible across transient demux gaps.
+static void update_detail_snapshot_cache(struct screen_state *state, struct demux_snapshot *snapshot) {
+  if (snapshot->service_count > 0) {
+    if (snapshot->network_name_len == 0 &&
+        state->detail_snapshot_valid &&
+        state->detail_snapshot_frontend == state->selected_frontend &&
+        state->detail_snapshot.network_name_len > 0) {
+      snapshot->network_name_len = state->detail_snapshot.network_name_len;
+      snprintf(snapshot->network_name, sizeof(snapshot->network_name), "%s", state->detail_snapshot.network_name);
+    }
+
+    state->detail_snapshot = *snapshot;
+    state->detail_snapshot_frontend = state->selected_frontend;
+    state->detail_snapshot_valid = true;
+
+    return;
+  }
+
+  if (state->detail_snapshot_valid && state->detail_snapshot_frontend == state->selected_frontend)
+    *snapshot = state->detail_snapshot;
+}
+
 // Render the fullscreen demux detail view for the selected frontend.
 static unsigned int render_demux_detail(struct screen_state *state, struct dvb_data_s *dvb_data, const struct dvb_scan_config *scan_config, unsigned int line, int footer_row) {
   char fedev[128];
@@ -812,19 +834,7 @@ static unsigned int render_demux_detail(struct screen_state *state, struct dvb_d
   format_frontend_path(fedev, sizeof(fedev), selected_dvb_data->adapter, selected_dvb_data->subadapter);
   format_demux_path(dedev, sizeof(dedev), selected_dvb_data->adapter, selected_dvb_data->subadapter);
   read_demux_snapshot(selected_dvb_data, &snapshot);
-
-  if (snapshot.service_count > 0) {
-    if (snapshot.network_name_len == 0 && state->detail_snapshot_valid && state->detail_snapshot_frontend == state->selected_frontend && state->detail_snapshot.network_name_len > 0) {
-      snapshot.network_name_len = state->detail_snapshot.network_name_len;
-      snprintf(snapshot.network_name, sizeof(snapshot.network_name), "%s", state->detail_snapshot.network_name);
-    }
-
-    state->detail_snapshot = snapshot;
-    state->detail_snapshot_frontend = state->selected_frontend;
-    state->detail_snapshot_valid = true;
-  } else if (state->detail_snapshot_valid && state->detail_snapshot_frontend == state->selected_frontend) {
-    snapshot = state->detail_snapshot;
-  }
+  update_detail_snapshot_cache(state, &snapshot);
 
   move(line++, 0);
   CYAN_BOLD_ON;

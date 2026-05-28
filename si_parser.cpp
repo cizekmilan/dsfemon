@@ -10,6 +10,12 @@
 #include "pmt_table.h"
 #include "sdt_table.h"
 
+#define LANGUAGE_CODE_SIZE 4
+#define MAX_LANGUAGE_CODES 16
+#define MAX_VISIBLE_LANGUAGE_CODES 3
+#define MAX_CA_SUMMARY_VALUES 32
+#define MAX_VISIBLE_CA_SYSTEM_IDS 4
+
 // Tiny local helper kept here to avoid pulling in C++ utility headers.
 static int min_int(int a, int b) {
   return a < b ? a : b;
@@ -206,14 +212,14 @@ static bool find_sdt_service_descriptor(struct dvb_data_s *dvb_data, int service
 
 // Keep language columns compact by translating common ISO 639-2 codes to two letters.
 static void format_iso639_language_code(const unsigned char *raw_code, char *language, size_t language_size) {
-  char iso_code[4];
+  char iso_code[LANGUAGE_CODE_SIZE];
 
   if (language_size == 0)
     return;
 
-  for (int i = 0; i < 3; i++)
+  for (int i = 0; i < LANGUAGE_CODE_SIZE - 1; i++)
     iso_code[i] = (char)tolower(raw_code[i]);
-  iso_code[3] = '\0';
+  iso_code[LANGUAGE_CODE_SIZE - 1] = '\0';
 
   if (strcmp(iso_code, "ces") == 0 || strcmp(iso_code, "cze") == 0)
     snprintf(language, language_size, "cs");
@@ -281,15 +287,15 @@ static int append_unique_token(char *buffer, size_t buffer_size, const char *tok
   if (current_len + separator_len + token_len >= buffer_size)
     return current_len;
 
-  if (separator_len > 0)
-    strcat(buffer, ",");
-  strcat(buffer, token);
+  int written = snprintf(buffer + current_len, buffer_size - current_len, "%s%s", separator_len > 0 ? "," : "", token);
+  if (written < 0)
+    return current_len;
 
   return strlen(buffer);
 }
 
 // Store one unique language token in a temporary ordered list.
-static void add_unique_language(char languages[][4], int *language_count, int max_language_count, const char *language) {
+static void add_unique_language(char languages[][LANGUAGE_CODE_SIZE], int *language_count, int max_language_count, const char *language) {
   if (language == NULL || language[0] == '\0')
     return;
 
@@ -301,12 +307,12 @@ static void add_unique_language(char languages[][4], int *language_count, int ma
   if (*language_count >= max_language_count)
     return;
 
-  snprintf(languages[*language_count], 4, "%s", language);
+  snprintf(languages[*language_count], LANGUAGE_CODE_SIZE, "%s", language);
   (*language_count)++;
 }
 
 // Move preferred local languages to the front while keeping other languages stable.
-static int ordered_language_count(char ordered_languages[][4], int max_language_count, char languages[][4], int language_count) {
+static int ordered_language_count(char ordered_languages[][LANGUAGE_CODE_SIZE], int max_language_count, char languages[][LANGUAGE_CODE_SIZE], int language_count) {
   static const char *preferred_languages[] = {"cs", "sk", "de", "en"};
   int ordered_count = 0;
 
@@ -324,10 +330,10 @@ static int ordered_language_count(char ordered_languages[][4], int max_language_
 }
 
 // Format at most three language tokens and append a compact +N overflow marker.
-static int format_language_summary(char languages[][4], int language_count, char *buffer, size_t buffer_size) {
-  char ordered_languages[16][4];
-  int ordered_count = ordered_language_count(ordered_languages, 16, languages, language_count);
-  int visible_count = ordered_count > 3 ? 3 : ordered_count;
+static int format_language_summary(char languages[][LANGUAGE_CODE_SIZE], int language_count, char *buffer, size_t buffer_size) {
+  char ordered_languages[MAX_LANGUAGE_CODES][LANGUAGE_CODE_SIZE];
+  int ordered_count = ordered_language_count(ordered_languages, MAX_LANGUAGE_CODES, languages, language_count);
+  int visible_count = ordered_count > MAX_VISIBLE_LANGUAGE_CODES ? MAX_VISIBLE_LANGUAGE_CODES : ordered_count;
 
   if (buffer_size == 0)
     return 0;
@@ -347,14 +353,73 @@ static int format_language_summary(char languages[][4], int language_count, char
   return strlen(buffer);
 }
 
-// Append a unique CA system/PID pair in compact form.
-static void append_ca_descriptor(char *buffer, size_t buffer_size, const unsigned char *data, int descriptor_pointer) {
-  char token[32];
+// Store one unique integer in a small fixed-size summary list.
+static void add_unique_int(int *values, int *value_count, int max_value_count, int value) {
+  for (int i = 0; i < *value_count; i++) {
+    if (values[i] == value)
+      return;
+  }
+
+  if (*value_count >= max_value_count)
+    return;
+
+  values[*value_count] = value;
+  (*value_count)++;
+}
+
+// Collect CA system IDs and CA PIDs from one descriptor.
+static void collect_ca_descriptor(int *ca_system_ids, int *ca_system_count, int max_ca_system_count, int *ca_pids, int *ca_pid_count, int max_ca_pid_count, const unsigned char *data, int descriptor_pointer) {
   int ca_system_id = read_u16_be(data, descriptor_pointer + 2);
   int ca_pid = read_13_bit_pid(data, descriptor_pointer + 4);
 
-  snprintf(token, sizeof(token), "0x%04x/%d", ca_system_id, ca_pid);
-  append_unique_token(buffer, buffer_size, token);
+  add_unique_int(ca_system_ids, ca_system_count, max_ca_system_count, ca_system_id);
+  add_unique_int(ca_pids, ca_pid_count, max_ca_pid_count, ca_pid);
+}
+
+// Append text to a bounded parser summary buffer.
+static void append_summary_text(char *buffer, size_t buffer_size, size_t *used, const char *text) {
+  if (buffer_size == 0 || used == NULL || *used >= buffer_size - 1)
+    return;
+
+  int written = snprintf(buffer + *used, buffer_size - *used, "%s", text);
+  if (written < 0)
+    return;
+
+  if ((size_t)written >= buffer_size - *used)
+    *used = buffer_size - 1;
+  else
+    *used += written;
+}
+
+// Format CA details as systems plus PID count, keeping long descriptors readable.
+static int format_ca_details(int *ca_system_ids, int ca_system_count, int ca_pid_count, char *buffer, size_t buffer_size) {
+  size_t used = 0;
+  int visible_system_count = ca_system_count > MAX_VISIBLE_CA_SYSTEM_IDS ? MAX_VISIBLE_CA_SYSTEM_IDS : ca_system_count;
+
+  if (buffer_size == 0)
+    return 0;
+
+  buffer[0] = '\0';
+
+  for (int i = 0; i < visible_system_count; i++) {
+    char system_text[16];
+
+    snprintf(system_text, sizeof(system_text), "0x%04x", ca_system_ids[i]);
+    append_summary_text(buffer, buffer_size, &used, i > 0 ? "," : "");
+    append_summary_text(buffer, buffer_size, &used, system_text);
+  }
+
+  if (ca_system_count > visible_system_count)
+    append_summary_text(buffer, buffer_size, &used, ", ...");
+
+  if (ca_pid_count > 0) {
+    char pid_text[24];
+
+    snprintf(pid_text, sizeof(pid_text), " | %d PIDs", ca_pid_count);
+    append_summary_text(buffer, buffer_size, &used, pid_text);
+  }
+
+  return strlen(buffer);
 }
 
 // Count PAT program entries available in the cached PAT section.
@@ -450,7 +515,7 @@ int pmt_pcr_pid(struct dvb_data_s *dvb_data, int program_pid) {
 
 // Collect unique ISO 639 language codes from PMT stream descriptors.
 int pmt_read_audio_languages(struct dvb_data_s *dvb_data, int program_pid, char *languages, size_t languages_size) {
-  char collected_languages[16][4];
+  char collected_languages[MAX_LANGUAGE_CODES][LANGUAGE_CODE_SIZE];
   int language_count = 0;
 
   if (languages == NULL || languages_size == 0)
@@ -481,10 +546,10 @@ int pmt_read_audio_languages(struct dvb_data_s *dvb_data, int program_pid, char 
 
       if (descriptor_tag == PMT_ISO_639_LANGUAGE_DESCRIPTOR) {
         for (int language_pointer = descriptor_pointer + 2; language_pointer + 4 <= descriptor_end; language_pointer += 4) {
-          char language[4];
+          char language[LANGUAGE_CODE_SIZE];
 
           format_iso639_language_code(&data[language_pointer], language, sizeof(language));
-          add_unique_language(collected_languages, &language_count, 16, language);
+          add_unique_language(collected_languages, &language_count, MAX_LANGUAGE_CODES, language);
         }
       }
 
@@ -497,6 +562,11 @@ int pmt_read_audio_languages(struct dvb_data_s *dvb_data, int program_pid, char 
 
 // Collect CA descriptors from PMT program and stream descriptor loops.
 int pmt_read_ca_details(struct dvb_data_s *dvb_data, int program_pid, char *ca_details, size_t ca_details_size) {
+  int ca_system_ids[MAX_CA_SUMMARY_VALUES];
+  int ca_pids[MAX_CA_SUMMARY_VALUES];
+  int ca_system_count = 0;
+  int ca_pid_count = 0;
+
   if (ca_details == NULL || ca_details_size == 0)
     return 0;
 
@@ -520,7 +590,7 @@ int pmt_read_ca_details(struct dvb_data_s *dvb_data, int program_pid, char *ca_d
         break;
 
       if (descriptor_tag == PMT_CA_DESCRIPTOR && descriptor_length >= 4)
-        append_ca_descriptor(ca_details, ca_details_size, data, descriptor_pointer);
+        collect_ca_descriptor(ca_system_ids, &ca_system_count, MAX_CA_SUMMARY_VALUES, ca_pids, &ca_pid_count, MAX_CA_SUMMARY_VALUES, data, descriptor_pointer);
 
       descriptor_pointer = descriptor_end;
     }
@@ -542,13 +612,13 @@ int pmt_read_ca_details(struct dvb_data_s *dvb_data, int program_pid, char *ca_d
         break;
 
       if (descriptor_tag == PMT_CA_DESCRIPTOR && descriptor_length >= 4)
-        append_ca_descriptor(ca_details, ca_details_size, data, descriptor_pointer);
+        collect_ca_descriptor(ca_system_ids, &ca_system_count, MAX_CA_SUMMARY_VALUES, ca_pids, &ca_pid_count, MAX_CA_SUMMARY_VALUES, data, descriptor_pointer);
 
       descriptor_pointer = descriptor_end;
     }
   }
 
-  return strlen(ca_details);
+  return format_ca_details(ca_system_ids, ca_system_count, ca_pid_count, ca_details, ca_details_size);
 }
 
 // Find the NIT PID by locating PAT program number 0.

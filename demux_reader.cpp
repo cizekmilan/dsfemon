@@ -1,7 +1,6 @@
 #include "demux_internal.h"
 
 #include <linux/dvb/dmx.h>
-#include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -26,43 +25,6 @@ static void store_pid_data(struct dvb_data_s *dvb_data, int pid, unsigned char *
   pthread_mutex_unlock(&dvb_data->data_lock);
 }
 
-// Developer/debug helper for inspecting raw PSI/SI bytes when needed.
-void dump_hex(__u8 *buf, int size) {
-  int i;
-  unsigned char ch;
-  char sascii[17];
-
-  sascii[16] = 0x0;
-
-  for (i = 0; i < size; i++) {
-    ch = buf[i];
-
-    if (i % 16 == 0) {
-      printf("%04x ", i);
-    }
-
-    printf("%02x ", ch);
-    if (ch >= ' ' && ch <= '}')
-      sascii[i % 16] = ch;
-    else
-      sascii[i % 16] = '.';
-
-    if (i % 16 == 15)
-      printf("   %s\n", sascii);
-  }
-
-  // i++ after loop
-  if (i % 16 != 0) {
-
-    for (; i % 16 != 0; i++) {
-      printf("   ");
-      sascii[i % 16] = ' ';
-    }
-
-    printf("   %s\n", sascii);
-  }
-}
-
 // Read one filtered PSI/SI section for a PID from the demux device.
 static int read_pid(struct dvb_data_s *dvb_data, unsigned char *data, int size_data, int pid) {
   if (demux_stop_requested(dvb_data) || dvb_data->defd < 0 || !demux_valid_pid(pid))
@@ -74,15 +36,13 @@ static int read_pid(struct dvb_data_s *dvb_data, unsigned char *data, int size_d
     return -1;
   }
 
-  struct dmx_sct_filter_params sctFilterParams;
-  memset(&sctFilterParams, 0, sizeof(struct dmx_sct_filter_params));
-  sctFilterParams.pid = pid;
-  //    sctFilterParams.filter.filter[0] = 0x0;
-  //    sctFilterParams.filter.mask[0] = 0xff;
-  sctFilterParams.timeout = DEMUX_READ_TIMEOUT_MS;
-  sctFilterParams.flags = DMX_IMMEDIATE_START | DMX_CHECK_CRC;
+  struct dmx_sct_filter_params filter_params;
+  memset(&filter_params, 0, sizeof(struct dmx_sct_filter_params));
+  filter_params.pid = pid;
+  filter_params.timeout = DEMUX_READ_TIMEOUT_MS;
+  filter_params.flags = DMX_IMMEDIATE_START | DMX_CHECK_CRC;
 
-  if (ioctl(dvb_data->defd, DMX_SET_FILTER, &sctFilterParams) < 0) {
+  if (ioctl(dvb_data->defd, DMX_SET_FILTER, &filter_params) < 0) {
     return -1;
   }
 
@@ -104,13 +64,13 @@ static void *read_dvb(void *par) {
     unsigned char data[TS_SIZE * 5];
     int len;
 
-    // read PAT table
+    // Read PAT first; it tells us which PMT/NIT PIDs to refresh next.
     len = read_pid(dvb_data, data, sizeof(data), PAT_PID);
     if (len <= 0)
       continue;
     store_pid_data(dvb_data, PAT_PID, data, len);
 
-    // check PAT section and check PMT table
+    // Program 0 points to NIT; other program entries point to PMT sections.
     for (int pat_section = 0; pat_section < si_count_pat_programs(dvb_data); pat_section++) {
       int program_pid = si_pat_program_pid(dvb_data, pat_section);
       if (!demux_valid_pid(program_pid))
@@ -118,14 +78,13 @@ static void *read_dvb(void *par) {
       if (demux_stop_requested(dvb_data))
         break;
 
-      // read PMT table and NIT table
       len = read_pid(dvb_data, data, sizeof(data), program_pid);
       if (len <= 0)
         continue;
       store_pid_data(dvb_data, program_pid, data, len);
     }
 
-    // read SDT table
+    // SDT carries service names and service-level flags.
     if (demux_stop_requested(dvb_data))
       break;
     len = read_pid(dvb_data, data, sizeof(data), SDT_PID);

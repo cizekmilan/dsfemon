@@ -35,7 +35,7 @@ void format_scan_adapter_selection(const struct dvb_scan_config *config, char *b
   if (buffer == NULL || buffer_size == 0)
     return;
 
-  int used = 0;
+  size_t used = 0;
 
   if (!config->adapter_filter_enabled) {
     snprintf(buffer, buffer_size, "%d-%d", config->min_adapter, config->max_adapter - 1);
@@ -75,7 +75,6 @@ void format_demux_path(char *buffer, size_t buffer_size, int adapter, int subada
 
 // Initialize all slots to a closed/no-device state before discovery starts.
 void init_dvb_devices(struct dvb_data_s *dvb_data, int device_count) {
-
   for (int i = 0; i < device_count; i++) {
     dvb_data[i].adapter = -1;
     dvb_data[i].subadapter = -1;
@@ -108,8 +107,10 @@ int discover_dvb_devices(struct dvb_data_s *dvb_data, int device_count, const st
       char fedev[128];
       format_frontend_path(fedev, sizeof(fedev), adapter, subadapter);
       device->fefd = open(fedev, O_RDONLY | O_NONBLOCK);
-      if (device->fefd >= 0)
-        discovered_frontends++;
+      if (device->fefd < 0)
+        continue;
+
+      discovered_frontends++;
 
       char dedev[128];
       format_demux_path(dedev, sizeof(dedev), adapter, subadapter);
@@ -117,12 +118,18 @@ int discover_dvb_devices(struct dvb_data_s *dvb_data, int device_count, const st
 
       if (device->defd >= 0) {
         device->pid_data = (pid_data_s *)calloc(TS_PID_COUNT, sizeof(*device->pid_data));
-        if (device->pid_data == NULL)
+        if (device->pid_data == NULL) {
+          close(device->defd);
+          device->defd = -1;
+
           continue;
+        }
 
         if (start_dvb_reader(device) != 0) {
           free(device->pid_data);
           device->pid_data = NULL;
+          close(device->defd);
+          device->defd = -1;
         }
       }
     }
@@ -133,7 +140,6 @@ int discover_dvb_devices(struct dvb_data_s *dvb_data, int device_count, const st
 
 // Stop reader threads, close file descriptors, and release per-device caches.
 void cleanup_dvb_devices(struct dvb_data_s *dvb_data, int device_count) {
-
   for (int i = 0; i < device_count; i++)
     request_dvb_reader_stop(&dvb_data[i]);
 
