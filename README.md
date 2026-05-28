@@ -18,9 +18,9 @@ It shows a compact live overview of DVB tuner state in a terminal UI and is inte
 - reads modern DVBv5 properties when available
 - keeps legacy DVB ioctl fallbacks for signal and SNR bars
 - displays DVB delivery system, frequency, bandwidth, symbol rate, FEC, and modulation
-- reads basic NIT/SDT demux information and shows network/service names
+- reads PAT/PMT/NIT/SDT demux information and shows network/service names
 - supports paging when many frontends are present
-- provides keyboard navigation and a scrollable demux service detail screen with PMT/service status information
+- provides keyboard navigation and a scrollable demux service detail screen with service type, language, provider, PCR PID, CA, and PMT stream information
 
 ## ⌨️ Controls
 
@@ -91,7 +91,7 @@ Additional commands and useful arguments:
 ├── docs/
 │   └── screenshots/
 │       └── dsfemon-main.png      # main application screenshot
-├── dsfemon.cpp                   # main ncurses loop, paging, keyboard handling
+├── dsfemon.cpp                   # main ncurses loop, paging, detail view, keyboard handling
 ├── command_line.*                # command-line options
 ├── device_discovery.*            # DVB device scanning and lifecycle
 ├── frontend_monitor.*            # DVBv5 property collection
@@ -114,7 +114,8 @@ Additional commands and useful arguments:
 - ✅ default adapter scan starts at adapter `0`
 - ✅ DVBv5 properties are read individually for better compatibility with older drivers
 - ✅ paging and keyboard navigation are implemented
-- ✅ demux detail shows a scrollable service table with PMT PID, stream count, CA flag, and running status
+- ✅ demux detail shows a scrollable service table with service type, PMT/PCR PIDs, streams, language, CA, provider, and running status
+- ✅ demux detail keeps the last valid snapshot visible during transient SI/PMT refresh gaps
 
 ## 🙏 Acknowledgements
 
