@@ -60,6 +60,7 @@ int read_demux_snapshot(struct dvb_data_s *dvb_data, struct demux_snapshot *snap
       continue;
 
     service->service_id = si_sdt_service_id(dvb_data, service_index);
+    service->program_pid = si_find_program_pid(dvb_data, service->service_id);
     service->running_status = si_sdt_service_running_status(dvb_data, service_index);
     service->free_ca_mode = si_sdt_service_free_ca_mode(dvb_data, service_index);
     snapshot->service_count++;

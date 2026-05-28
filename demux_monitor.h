@@ -32,6 +32,7 @@ struct dvb_data_s {
 // One named service from the SDT. Extra fields are kept for the future detail view.
 struct demux_service_snapshot {
   int service_id;
+  int program_pid;
   int running_status;
   int free_ca_mode;
   int name_len;

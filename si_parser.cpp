@@ -159,6 +159,17 @@ int si_pat_program_pid(struct dvb_data_s *dvb_data, int pat_section) {
   return read_13_bit_pid(dvb_data->pid_data[PAT_PID].data, pointer + 2);
 }
 
+// Find the PMT PID for one PAT program_number/service_id.
+int si_find_program_pid(struct dvb_data_s *dvb_data, int program_number) {
+
+  for (int pat_section = 0; pat_section < si_count_pat_programs(dvb_data); pat_section++) {
+    if (pat_program_number(dvb_data, pat_section) == program_number)
+      return si_pat_program_pid(dvb_data, pat_section);
+  }
+
+  return -1;
+}
+
 // Count elementary stream entries in a cached PMT section.
 int count_pmt_streams(struct dvb_data_s *dvb_data, int program_pid) {
   if (!demux_has_pid_data(dvb_data, program_pid, PMT_SECT_HEADER_LEN))

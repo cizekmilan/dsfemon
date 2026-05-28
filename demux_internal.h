@@ -9,6 +9,7 @@ int demux_has_pid_data(struct dvb_data_s *dvb_data, int pid, unsigned int min_le
 
 int si_count_pat_programs(struct dvb_data_s *dvb_data);
 int si_pat_program_pid(struct dvb_data_s *dvb_data, int pat_section);
+int si_find_program_pid(struct dvb_data_s *dvb_data, int program_number);
 int si_find_nit_pid(struct dvb_data_s *dvb_data);
 int si_read_nit_network_name(struct dvb_data_s *dvb_data, int program_pid, char *network_name);
 int si_count_sdt_services(struct dvb_data_s *dvb_data);

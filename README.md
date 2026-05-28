@@ -20,15 +20,15 @@ It shows a compact live overview of DVB tuner state in a terminal UI and is inte
 - displays DVB delivery system, frequency, bandwidth, symbol rate, FEC, and modulation
 - reads basic NIT/SDT demux information and shows network/service names
 - supports paging when many frontends are present
-- provides keyboard navigation and a placeholder demux detail screen
+- provides keyboard navigation and a scrollable demux service detail screen
 
 ## ⌨️ Controls
 
 | Key | Action |
 | --- | --- |
-| `Up` / `Down` | select frontend detail row |
-| `PgUp` / `PgDn` | switch page |
-| `Enter` | open demux detail placeholder |
+| `Up` / `Down` | select frontend detail row or service row |
+| `PgUp` / `PgDn` | switch page or scroll detail page |
+| `Enter` | open demux detail |
 | `Esc` | return from detail view |
 | `q` | quit |
 
@@ -45,12 +45,6 @@ Debian/Ubuntu example:
 
 ```bash
 sudo apt install build-essential pkg-config libncurses-dev
-```
-
-Optional cleanup on systems that previously used the old ncurses development package:
-
-```bash
-sudo apt remove libncurses5-dev
 ```
 
 ## 🔨 Building
@@ -119,7 +113,7 @@ Additional commands and useful arguments:
 - ✅ default adapter scan starts at adapter `0`
 - ✅ DVBv5 properties are read individually for better compatibility with older drivers
 - ✅ paging and keyboard navigation are implemented
-- ✅ demux detail navigation is prepared, but the detailed service/PMT view is still planned
+- ✅ demux detail shows a scrollable service table; detailed PMT/stream view is still planned
 
 ## 🙏 Acknowledgements
 
@@ -130,5 +124,3 @@ This project is based on his original work and continues it as a modernized open
 ## License
 
 Permission was granted to continue and publish the project under the condition that open-source principles are preserved.
-
-A standard open-source license should be added once the exact license choice is confirmed.
