@@ -228,7 +228,7 @@ static bool find_sdt_part(struct dvb_data_s *dvb_data, int service_index, struct
     return false;
 
   int current_index = 0;
-  struct sdt_section_cache_s *cache = dvb_data->sdt_cache;
+  struct demux_table_cache_s *cache = dvb_data->sdt_cache;
 
   if (cache != NULL && cache->initialized && !cache->complete)
     return false;
@@ -726,15 +726,11 @@ int si_find_nit_pid(struct dvb_data_s *dvb_data) {
   return -1;
 }
 
-// Extract the NIT network_name_descriptor text from the network descriptor loop.
-int si_read_nit_network_name(struct dvb_data_s *dvb_data, int program_pid, char *network_name) {
-  if (!demux_has_pid_data(dvb_data, program_pid, NIT_SECT_HEADER_LEN))
-    return 0;
-  const unsigned char *data = dvb_data->pid_data[program_pid].data;
-
+// Extract the NIT network_name_descriptor text from one NIT section.
+static int read_nit_network_name_from_section(const unsigned char *data, unsigned int len, char *network_name) {
   int pointer = NIT_SECT_HEADER_LEN;
   int descriptors_end = pointer + read_12_bit_length(data, 8);
-  int section_end = psi_payload_end(dvb_data, program_pid, NIT_SECT_HEADER_LEN);
+  int section_end = psi_payload_end_for_section(data, len, NIT_SECT_HEADER_LEN);
   if (descriptors_end > section_end)
     descriptors_end = section_end;
 
@@ -760,12 +756,41 @@ int si_read_nit_network_name(struct dvb_data_s *dvb_data, int program_pid, char 
   return 0;
 }
 
+// Extract the NIT network_name_descriptor text from cached NIT sections.
+int si_read_nit_network_name(struct dvb_data_s *dvb_data, int program_pid, char *network_name) {
+  if (dvb_data == NULL)
+    return 0;
+
+  struct demux_table_cache_s *cache = dvb_data->nit_cache;
+  if (cache != NULL && cache->initialized && !cache->complete)
+    return 0;
+
+  if (cache != NULL && cache->initialized) {
+    for (int section_number = 0; section_number <= cache->last_section_number; section_number++) {
+      struct demux_section_s *section = &cache->sections[section_number];
+      if (section->len < NIT_SECT_HEADER_LEN)
+        continue;
+
+      int network_name_len = read_nit_network_name_from_section(section->data, section->len, network_name);
+      if (network_name_len > 0)
+        return network_name_len;
+    }
+
+    return 0;
+  }
+
+  if (!demux_has_pid_data(dvb_data, program_pid, NIT_SECT_HEADER_LEN))
+    return 0;
+
+  return read_nit_network_name_from_section(dvb_data->pid_data[program_pid].data, dvb_data->pid_data[program_pid].len, network_name);
+}
+
 // Count SDT service entries available in the cached SDT section.
 int si_count_sdt_services(struct dvb_data_s *dvb_data) {
   if (dvb_data == NULL)
     return 0;
 
-  struct sdt_section_cache_s *cache = dvb_data->sdt_cache;
+  struct demux_table_cache_s *cache = dvb_data->sdt_cache;
   if (cache != NULL && cache->initialized && !cache->complete)
     return 0;
 

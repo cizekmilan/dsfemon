@@ -7,7 +7,7 @@ struct dvb_data_s;
 struct frontend_status_cache;
 
 // Create a shared cache for frontend status snapshots owned by one worker thread.
-struct frontend_status_cache *create_frontend_status_cache(struct dvb_data_s *dvb_data, int device_count);
+struct frontend_status_cache *create_frontend_status_cache(struct dvb_data_s *dvb_data, int device_count, unsigned long long refresh_interval_us);
 
 // Start the single background worker that reads frontend status ioctls.
 int start_frontend_status_cache(struct frontend_status_cache *cache);

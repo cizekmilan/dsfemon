@@ -6,6 +6,10 @@
 
 #include "device_discovery.h"
 
+#define DSFEMON_DEFAULT_REFRESH_INTERVAL_MS 500
+#define DSFEMON_MIN_REFRESH_INTERVAL_MS 100
+#define DSFEMON_MAX_REFRESH_INTERVAL_MS 60000
+
 // Requested top-level action after command-line parsing.
 enum command_line_action {
   COMMAND_LINE_RUN,
@@ -17,6 +21,7 @@ enum command_line_action {
 struct command_line_options {
   enum command_line_action action;
   struct dvb_scan_config scan_config;
+  int refresh_interval_ms;
 };
 
 void init_command_line_options(struct command_line_options *options);

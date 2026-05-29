@@ -1,8 +1,8 @@
 /*
  * File role: command-line parsing for dsfemon.
  *
- * Handles --help, --version, adapter selection, subadapter limits, parser
- * errors, and the stable user-facing usage text before ncurses starts.
+ * Handles --help, --version, adapter selection, subadapter limits, refresh
+ * interval, parser errors, and the stable usage text before ncurses starts.
  */
 
 #include "command_line.h"
@@ -54,6 +54,21 @@ static int validate_adapter(int adapter, char *error_buffer, size_t error_buffer
   return command_line_error(error_buffer, error_buffer_size, "Adapter must be between 0 and %d.", DVB_MAX_ADAPTERS - 1);
 }
 
+// Parse and validate the monitor refresh interval in milliseconds.
+static int parse_refresh_interval(const char *text, int *refresh_interval_ms, char *error_buffer, size_t error_buffer_size) {
+  if (!parse_non_negative_int(text, refresh_interval_ms))
+    return command_line_error(error_buffer, error_buffer_size, "Refresh interval must be a decimal number of milliseconds.");
+
+  if (*refresh_interval_ms < DSFEMON_MIN_REFRESH_INTERVAL_MS || *refresh_interval_ms > DSFEMON_MAX_REFRESH_INTERVAL_MS)
+    return command_line_error(error_buffer,
+                              error_buffer_size,
+                              "Refresh interval must be between %d and %d ms.",
+                              DSFEMON_MIN_REFRESH_INTERVAL_MS,
+                              DSFEMON_MAX_REFRESH_INTERVAL_MS);
+
+  return 0;
+}
+
 // Parse a comma-separated adapter selection such as "0" or "0,2,5".
 static int parse_adapter_list(const char *text, struct dvb_scan_config *scan_config, char *error_buffer, size_t error_buffer_size) {
   const char *part_start = text;
@@ -99,6 +114,7 @@ void init_command_line_options(struct command_line_options *options) {
   options->scan_config.max_adapter = DVB_DEFAULT_MAX_ADAPTER;
   options->scan_config.max_subadapter = DVB_MAX_SUBADAPTERS;
   options->scan_config.adapter_filter_enabled = false;
+  options->refresh_interval_ms = DSFEMON_DEFAULT_REFRESH_INTERVAL_MS;
   memset(options->scan_config.adapter_enabled, 0, sizeof(options->scan_config.adapter_enabled));
 }
 
@@ -107,6 +123,7 @@ int parse_command_line(int argc, char **argv, struct command_line_options *optio
   static const struct option long_options[] = {
       {"adapters", required_argument, NULL, 'a'},
       {"subadapters", required_argument, NULL, 's'},
+      {"interval", required_argument, NULL, 'i'},
       {"help", no_argument, NULL, 'h'},
       {"version", no_argument, NULL, 'v'},
       {NULL, 0, NULL, 0}};
@@ -116,7 +133,7 @@ int parse_command_line(int argc, char **argv, struct command_line_options *optio
 
   int option;
 
-  while ((option = getopt_long(argc, argv, ":a:s:hv", long_options, NULL)) != -1) {
+  while ((option = getopt_long(argc, argv, ":a:s:i:hv", long_options, NULL)) != -1) {
     switch (option) {
       case 'a':
         if (parse_adapter_list(optarg, &options->scan_config, error_buffer, error_buffer_size) != 0)
@@ -134,6 +151,16 @@ int parse_command_line(int argc, char **argv, struct command_line_options *optio
           return command_line_error(error_buffer, error_buffer_size, "Subadapter count must be between 1 and %d.", DVB_MAX_SUBADAPTERS);
 
         options->scan_config.max_subadapter = subadapters;
+        break;
+      }
+
+      case 'i': {
+        int refresh_interval_ms;
+
+        if (parse_refresh_interval(optarg, &refresh_interval_ms, error_buffer, error_buffer_size) != 0)
+          return -1;
+
+        options->refresh_interval_ms = refresh_interval_ms;
         break;
       }
 
@@ -170,6 +197,7 @@ void print_usage(FILE *stream, const char *program_name) {
   fprintf(stream, "Options:\n");
   fprintf(stream, "  -a, --adapters LIST       scan only selected adapters, for example 0 or 0,2,5\n");
   fprintf(stream, "  -s, --subadapters N       scan N frontends per adapter, default %d\n", DVB_MAX_SUBADAPTERS);
+  fprintf(stream, "  -i, --interval MS         refresh interval, %d-%d ms, default %d\n", DSFEMON_MIN_REFRESH_INTERVAL_MS, DSFEMON_MAX_REFRESH_INTERVAL_MS, DSFEMON_DEFAULT_REFRESH_INTERVAL_MS);
   fprintf(stream, "  -h, --help                show this help\n");
   fprintf(stream, "  -v, --version             show program version\n");
 }

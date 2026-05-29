@@ -1,8 +1,8 @@
 /*
  * File role: background frontend status cache.
  *
- * Owns the single worker thread that reads opened frontends sequentially and
- * publishes complete status snapshots for the ncurses UI thread.
+ * Owns the single worker thread that reads opened frontends sequentially at
+ * the configured refresh interval and publishes snapshots for the UI thread.
  */
 
 #include "frontend_status_cache.h"
@@ -15,8 +15,6 @@
 
 #include "demux_monitor.h"
 
-// Background frontend status collection cadence.
-#define FRONTEND_STATUS_REFRESH_US 500000
 // Worker shutdown polling cadence; short enough to keep quit responsive.
 #define FRONTEND_STATUS_STOP_POLL_US 25000
 
@@ -34,6 +32,7 @@ struct frontend_status_cache {
   volatile int stop_thread;
   struct dvb_data_s *dvb_data;
   int device_count;
+  unsigned long long refresh_interval_us;
   struct frontend_status_cache_entry *entries;
 };
 
@@ -80,7 +79,7 @@ static void *frontend_status_worker(void *arg) {
     return NULL;
 
   while (!cache->stop_thread) {
-    unsigned long long next_refresh_us = monotonic_time_us() + FRONTEND_STATUS_REFRESH_US;
+    unsigned long long next_refresh_us = monotonic_time_us() + cache->refresh_interval_us;
 
     for (int device_index = 0; device_index < cache->device_count && !cache->stop_thread; device_index++) {
       struct dvb_data_s *current_dvb_data = &cache->dvb_data[device_index];
@@ -100,7 +99,7 @@ static void *frontend_status_worker(void *arg) {
   return NULL;
 }
 
-struct frontend_status_cache *create_frontend_status_cache(struct dvb_data_s *dvb_data, int device_count) {
+struct frontend_status_cache *create_frontend_status_cache(struct dvb_data_s *dvb_data, int device_count, unsigned long long refresh_interval_us) {
   if (dvb_data == NULL || device_count <= 0)
     return NULL;
 
@@ -117,6 +116,7 @@ struct frontend_status_cache *create_frontend_status_cache(struct dvb_data_s *dv
 
   cache->dvb_data = dvb_data;
   cache->device_count = device_count;
+  cache->refresh_interval_us = refresh_interval_us;
 
   if (pthread_mutex_init(&cache->lock, NULL) != 0) {
     free(cache->entries);

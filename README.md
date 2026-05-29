@@ -18,15 +18,18 @@ It shows a compact live overview of DVB tuner state in a terminal UI and is inte
 - reads modern DVBv5 properties when available
 - keeps legacy DVB ioctl fallbacks for signal and SNR bars
 - displays DVB delivery system, frequency, bandwidth, symbol rate, FEC, and modulation
-- reads PAT/PMT/NIT/SDT demux information and shows network/service names
+- reads PAT/PMT/NIT/SDT demux information and keeps multi-section NIT/SDT data stable
 - supports paging when many frontends are present
-- provides keyboard navigation and a scrollable demux service detail screen with service type, audio/teletext/subtitle languages, provider, PCR PID, CA, and PMT stream information
+- provides keyboard navigation with first/last item jumps
+- provides a configurable monitor refresh interval
+- shows a scrollable demux service detail screen with service type, audio/teletext/subtitle languages, provider, PCR PID, CA, and PMT stream information
 
 ## ⌨️ Controls
 
 | Key | Action |
 | --- | --- |
 | `Up` / `Down` | select frontend detail row or service row |
+| `Home` / `End` | jump to first or last frontend/service |
 | `PgUp` / `PgDn` | switch page or scroll detail page |
 | `Enter` | open demux detail |
 | `Esc` | return from detail view |
@@ -60,6 +63,19 @@ The resulting binary is:
 ./dsfemon
 ```
 
+Useful maintenance checks:
+
+```bash
+make format-check
+make -B
+```
+
+Optional local install:
+
+```bash
+sudo make install
+```
+
 ## ▶️ Running
 
 Start the monitor with the default broad adapter scan:
@@ -82,7 +98,12 @@ Additional commands and useful arguments:
 
 # Limit the number of frontends scanned per adapter
 ./dsfemon --subadapters 1
+
+# Change the monitor refresh interval in milliseconds, allowed range 100-60000
+./dsfemon --interval 1000
 ```
+
+The refresh interval controls both the ncurses redraw cadence and the background frontend status collection cadence. Demux/SI data is still read continuously by the per-device demux reader threads.
 
 ## 🗂️ Project Structure
 
@@ -91,7 +112,7 @@ Additional commands and useful arguments:
 ├── docs/
 │   └── screenshots/
 │       └── dsfemon-main.png      # main application screenshot
-├── dsfemon.cpp                   # main ncurses loop, paging, detail view, keyboard handling
+├── dsfemon.cpp                   # main ncurses loop, paging, and keyboard handling
 ├── command_line.*                # command-line options
 ├── device_discovery.*            # DVB device scanning and lifecycle
 ├── frontend_monitor.*            # DVBv5 property collection
@@ -99,6 +120,7 @@ Additional commands and useful arguments:
 ├── frontend_status.*             # frontend status snapshot collection
 ├── frontend_view.*               # frontend/status rendering
 ├── demux_reader.cpp              # background PAT/PMT/NIT/SDT section reader
+├── demux_detail_view.*           # fullscreen demux detail rendering and service navigation
 ├── demux_snapshot.cpp            # stable demux data copied for UI rendering
 ├── demux_view.*                  # demux/service summary rendering
 ├── si_parser.cpp                 # PSI/SI parser helpers
@@ -114,8 +136,10 @@ Additional commands and useful arguments:
 - ✅ default adapter scan starts at adapter `0`
 - ✅ DVBv5 properties are read individually for better compatibility with older drivers
 - ✅ paging and keyboard navigation are implemented
+- ✅ `Home` / `End` jump to first/last frontend or service
 - ✅ demux detail shows a scrollable service table with service type, PMT/PCR PIDs, streams, audio/teletext/subtitle languages, CA, provider, and running status
 - ✅ demux detail keeps the last valid snapshot visible during transient SI/PMT refresh gaps
+- ✅ multi-section NIT/SDT caches keep network and service tables stable when broadcasts split them across sections
 
 ## 🙏 Acknowledgements
 

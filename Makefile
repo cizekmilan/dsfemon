@@ -20,7 +20,8 @@ SOURCES := \
 	frontend_status.cpp \
 	ui_helpers.cpp \
 	frontend_view.cpp \
-	demux_view.cpp
+	demux_view.cpp \
+	demux_detail_view.cpp
 
 OBJECTS := $(SOURCES:%.cpp=$(BUILD_DIR)/%.o)
 FORMAT_SOURCES := $(SOURCES) $(wildcard *.h)

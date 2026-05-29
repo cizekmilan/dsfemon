@@ -16,7 +16,7 @@
 #define DEMUX_CA_DETAIL_TEXT_SIZE 160
 #define DEMUX_MAX_SERVICES 256
 #define DEMUX_MAX_SERVICE_STREAMS 16
-#define DEMUX_MAX_SDT_SECTIONS 256
+#define DEMUX_MAX_TABLE_SECTIONS 256
 
 // Raw PSI/SI section bytes cached per PID by the demux reader thread.
 struct pid_data_s {
@@ -24,21 +24,21 @@ struct pid_data_s {
   unsigned int len;
 };
 
-// One cached SDT section. Large service lists can span several SDT sections.
+// One cached PSI/SI section. Large tables can span several sections.
 struct demux_section_s {
   unsigned char data[DEMUX_SECTION_DATA_SIZE];
   unsigned int len;
 };
 
-// Multi-section SDT cache keyed by transport stream/version metadata.
-struct sdt_section_cache_s {
+// Multi-section PSI/SI cache keyed by table/version metadata.
+struct demux_table_cache_s {
   int initialized;
   int complete;
   int table_id;
-  int transport_stream_id;
+  int table_id_extension;
   int version_number;
   int last_section_number;
-  struct demux_section_s sections[DEMUX_MAX_SDT_SECTIONS];
+  struct demux_section_s sections[DEMUX_MAX_TABLE_SECTIONS];
 };
 
 // One discovered DVB frontend/demux pair and its demux reader state.
@@ -48,7 +48,8 @@ struct dvb_data_s {
   int fefd;
   int defd;
   struct pid_data_s *pid_data;
-  struct sdt_section_cache_s *sdt_cache;
+  struct demux_table_cache_s *nit_cache;
+  struct demux_table_cache_s *sdt_cache;
   pthread_mutex_t data_lock;
   pthread_t demux_thread;
   int demux_thread_started;

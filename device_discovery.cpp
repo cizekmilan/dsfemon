@@ -88,6 +88,7 @@ void init_dvb_devices(struct dvb_data_s *dvb_data, int device_count) {
     dvb_data[i].fefd = -1;
     dvb_data[i].defd = -1;
     dvb_data[i].pid_data = NULL;
+    dvb_data[i].nit_cache = NULL;
     dvb_data[i].sdt_cache = NULL;
     dvb_data[i].demux_thread_started = 0;
     dvb_data[i].stop_demux_thread = 0;
@@ -125,23 +126,29 @@ int discover_dvb_devices(struct dvb_data_s *dvb_data, int device_count, const st
       device->defd = open(dedev, O_RDWR | O_LARGEFILE);
 
       if (device->defd >= 0) {
-        device->pid_data = (pid_data_s *)calloc(TS_PID_COUNT, sizeof(*device->pid_data));
-        device->sdt_cache = (sdt_section_cache_s *)calloc(1, sizeof(*device->sdt_cache));
-        if (device->pid_data == NULL || device->sdt_cache == NULL) {
-          free(device->pid_data);
-          free(device->sdt_cache);
-          device->pid_data = NULL;
-          device->sdt_cache = NULL;
+        struct pid_data_s *pid_data = (pid_data_s *)calloc(TS_PID_COUNT, sizeof(*pid_data));
+        struct demux_table_cache_s *nit_cache = (demux_table_cache_s *)calloc(1, sizeof(*nit_cache));
+        struct demux_table_cache_s *sdt_cache = (demux_table_cache_s *)calloc(1, sizeof(*sdt_cache));
+        if (pid_data == NULL || nit_cache == NULL || sdt_cache == NULL) {
+          free(pid_data);
+          free(nit_cache);
+          free(sdt_cache);
           close(device->defd);
           device->defd = -1;
 
           continue;
         }
 
+        device->pid_data = pid_data;
+        device->nit_cache = nit_cache;
+        device->sdt_cache = sdt_cache;
+
         if (start_dvb_reader(device) != 0) {
           free(device->pid_data);
+          free(device->nit_cache);
           free(device->sdt_cache);
           device->pid_data = NULL;
+          device->nit_cache = NULL;
           device->sdt_cache = NULL;
           close(device->defd);
           device->defd = -1;
@@ -173,8 +180,10 @@ void cleanup_dvb_devices(struct dvb_data_s *dvb_data, int device_count) {
     }
 
     free(dvb_data[i].pid_data);
+    free(dvb_data[i].nit_cache);
     free(dvb_data[i].sdt_cache);
     dvb_data[i].pid_data = NULL;
+    dvb_data[i].nit_cache = NULL;
     dvb_data[i].sdt_cache = NULL;
     pthread_mutex_destroy(&dvb_data[i].data_lock);
   }
