@@ -29,11 +29,11 @@ It shows a compact live overview of DVB tuner state in a terminal UI and is inte
 | Key | Action |
 | --- | --- |
 | `Up` / `Down` | select frontend detail row or service row |
-| `Home` / `End` | jump to first or last frontend/service |
-| `PgUp` / `PgDn` | switch page or scroll detail page |
 | `Enter` | open demux detail |
-| `Esc` | return from detail view |
-| `q` | quit |
+| `PgUp` / `PgDn` | switch page or scroll detail page |
+| `Home` / `End` | jump to first or last frontend/service |
+| `ESC` | return from detail view |
+| `Q` | quit |
 
 ## 📦 Requirements
 

@@ -65,6 +65,52 @@ struct screen_state {
   struct demux_detail_state detail;
 };
 
+// One colored or plain segment in the footer keyboard help.
+struct footer_help_segment {
+  const char *text;
+  bool highlighted;
+};
+
+static const struct footer_help_segment MONITOR_FOOTER_HELP[] = {
+    {" ", false},
+    {"Up", true},
+    {"/", false},
+    {"Down", true},
+    {" select | ", false},
+    {"Enter", true},
+    {" detail | ", false},
+    {"PgUp", true},
+    {"/", false},
+    {"PgDn", true},
+    {" page | ", false},
+    {"Home", true},
+    {"/", false},
+    {"End", true},
+    {" jump | ", false},
+    {"Q", true},
+    {"uit ", false},
+};
+
+static const struct footer_help_segment DETAIL_FOOTER_HELP[] = {
+    {" ", false},
+    {"Up", true},
+    {"/", false},
+    {"Down", true},
+    {" service | ", false},
+    {"PgUp", true},
+    {"/", false},
+    {"PgDn", true},
+    {" page | ", false},
+    {"Home", true},
+    {"/", false},
+    {"End", true},
+    {" jump | ", false},
+    {"ESC", true},
+    {" back | ", false},
+    {"Q", true},
+    {"uit ", false},
+};
+
 // Async-signal-safe stop request consumed by the main loop.
 static void request_stop(int signal_number) {
   (void)signal_number;
@@ -460,14 +506,17 @@ static void render_header_bar(int header_row, int col, unsigned int current_page
   attroff(A_REVERSE);
 }
 
-// Keep monitor keyboard help in one place so the spinner can avoid overlapping it.
-static const char *monitor_footer_help_text(void) {
-  return " Up/Down select | Enter detail | PgUp/PgDn page | Home/End jump | Quit ";
-}
+// Return the footer help segment array for the active screen.
+static const struct footer_help_segment *footer_help_segments(bool detail_open, size_t *segment_count) {
+  if (detail_open) {
+    *segment_count = sizeof(DETAIL_FOOTER_HELP) / sizeof(DETAIL_FOOTER_HELP[0]);
 
-// Keep detail keyboard help separate from the monitor navigation help.
-static const char *detail_footer_help_text(void) {
-  return " Up/Down service | PgUp/PgDn page | Home/End jump | ESC back | Quit ";
+    return DETAIL_FOOTER_HELP;
+  }
+
+  *segment_count = sizeof(MONITOR_FOOTER_HELP) / sizeof(MONITOR_FOOTER_HELP[0]);
+
+  return MONITOR_FOOTER_HELP;
 }
 
 // Print one footer segment while respecting the terminal width.
@@ -488,46 +537,40 @@ static void add_footer_key(int col, const char *text) {
   REVERSE_RED_OFF;
 }
 
+// Count footer help columns from the same segments used for colored rendering.
+static int footer_help_text_len(bool detail_open) {
+  size_t segment_count;
+  const struct footer_help_segment *segments = footer_help_segments(detail_open, &segment_count);
+  int text_len = 0;
+
+  for (size_t i = 0; i < segment_count; i++)
+    text_len += strlen(segments[i].text);
+
+  return text_len;
+}
+
 // Render colored keyboard help without changing the plain text layout length.
 static void render_footer_help_text(int col, bool detail_open) {
-  add_footer_text(col, " ");
-  add_footer_key(col, "Up");
-  add_footer_text(col, "/");
-  add_footer_key(col, "Down");
-  add_footer_text(col, detail_open ? " service | " : " select | ");
+  size_t segment_count;
+  const struct footer_help_segment *segments = footer_help_segments(detail_open, &segment_count);
 
-  if (!detail_open) {
-    add_footer_key(col, "Enter");
-    add_footer_text(col, " detail | ");
+  for (size_t i = 0; i < segment_count; i++) {
+    if (segments[i].highlighted)
+      add_footer_key(col, segments[i].text);
+    else
+      add_footer_text(col, segments[i].text);
   }
-
-  add_footer_key(col, "PgUp");
-  add_footer_text(col, "/");
-  add_footer_key(col, "PgDn");
-  add_footer_text(col, " page | ");
-  add_footer_key(col, "Home");
-  add_footer_text(col, "/");
-  add_footer_key(col, "End");
-  add_footer_text(col, " jump | ");
-
-  if (detail_open) {
-    add_footer_key(col, "ESC");
-    add_footer_text(col, " back | ");
-  }
-
-  add_footer_key(col, "Q");
-  add_footer_text(col, "uit ");
 }
 
 // Return the right-aligned footer indicator column, or -1 when the row is tight.
-static int footer_indicator_column(int col, const char *help_text) {
+static int footer_indicator_column(int col, bool detail_open) {
   if (col <= 0)
     return -1;
 
   int indicator_len = strlen(" " DSFEMON_VERSION " [/] ");
   int indicator_col = col > indicator_len ? col - indicator_len : -1;
 
-  if (indicator_col <= (int)strlen(help_text))
+  if (indicator_col <= footer_help_text_len(detail_open))
     return -1;
 
   return indicator_col;
@@ -539,14 +582,13 @@ static void render_help_bar(int footer_row, int col, bool detail_open, unsigned 
     return;
 
   static const char spinner[] = "|/-\\";
-  const char *help_text = detail_open ? detail_footer_help_text() : monitor_footer_help_text();
 
   attron(A_REVERSE);
   mvhline(footer_row, 0, ' ', col);
   move(footer_row, 0);
   render_footer_help_text(col, detail_open);
 
-  int indicator_col = footer_indicator_column(col, help_text);
+  int indicator_col = footer_indicator_column(col, detail_open);
   if (indicator_col >= 0) {
     move(footer_row, indicator_col);
     printw(" %s [", DSFEMON_VERSION);
