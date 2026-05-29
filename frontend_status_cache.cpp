@@ -1,3 +1,10 @@
+/*
+ * File role: background frontend status cache.
+ *
+ * Owns the single worker thread that reads opened frontends sequentially and
+ * publishes complete status snapshots for the ncurses UI thread.
+ */
+
 #include "frontend_status_cache.h"
 
 #include <pthread.h>

@@ -1,3 +1,10 @@
+/*
+ * File role: shared ncurses UI helpers.
+ *
+ * Contains common row-clearing, bounded field-printing, bar-width, and
+ * no-device diagnostic helpers used across the monitor views.
+ */
+
 #include "ui_helpers.h"
 
 #include <curses.h>

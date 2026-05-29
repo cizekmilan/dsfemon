@@ -3,6 +3,13 @@
 #include <stdio.h>
 #include <linux/dvb/frontend.h>
 #include "color.h"
+/*
+ * File role: low-level ncurses presentation helpers.
+ *
+ * Provides bounded percentage bars plus FE_GET_INFO/status presentation used
+ * by the frontend view layer.
+ */
+
 #include "ncurses_present.h"
 
 // Draw a percentage bar whose total width is controlled by the caller.

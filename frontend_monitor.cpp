@@ -1,3 +1,10 @@
+/*
+ * File role: DVBv5 frontend property reader.
+ *
+ * Reads FE_GET_PROPERTY tuning parameters and statistics one property at a
+ * time so older drivers can return partial DVBv5 data without hiding all fields.
+ */
+
 #include "frontend_monitor.h"
 
 #include <linux/dvb/frontend.h>

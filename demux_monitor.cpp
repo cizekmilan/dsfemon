@@ -1,3 +1,10 @@
+/*
+ * File role: shared demux state helpers.
+ *
+ * Provides PID validation, reader stop checks, and cached PID-data guards used
+ * by the demux reader, PSI/SI parser, and snapshot builder.
+ */
+
 #include "demux_internal.h"
 
 // Validate MPEG-TS PID array indexes before touching pid_data.

@@ -1,3 +1,10 @@
+/*
+ * File role: stable demux snapshot builder.
+ *
+ * Copies display-ready network, service, PMT stream, language, and CA data
+ * from the live demux cache under lock so rendering never walks mutable data.
+ */
+
 #include "demux_internal.h"
 
 #include <ctype.h>
@@ -78,6 +85,8 @@ int read_demux_snapshot(struct dvb_data_s *dvb_data, struct demux_snapshot *snap
     service->provider_name_len = si_read_sdt_service_provider_name(dvb_data, service_index, service->provider_name);
     service->provider_name_len = clean_si_text(service->provider_name, service->provider_name_len);
     service->languages_len = pmt_read_audio_languages(dvb_data, service->program_pid, service->languages, sizeof(service->languages));
+    service->teletext_len = pmt_read_teletext_languages(dvb_data, service->program_pid, service->teletext, sizeof(service->teletext));
+    service->subtitle_len = pmt_read_subtitle_languages(dvb_data, service->program_pid, service->subtitles, sizeof(service->subtitles));
     service->ca_detail_len = pmt_read_ca_details(dvb_data, service->program_pid, service->ca_detail, sizeof(service->ca_detail));
     snapshot->service_count++;
   }

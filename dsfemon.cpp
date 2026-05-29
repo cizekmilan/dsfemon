@@ -1,6 +1,9 @@
 /*
  * dsfemon - DVB frontend monitor for Linux
  *
+ * File role: top-level ncurses application loop, page/detail navigation,
+ * header/footer bars, and demux detail view rendering.
+ *
  * 2012: Originally developed as Femon by David Seidl.
  * 2026: Modernized, refactored, and extended as dsfemon by Milan Cizek.
  *
@@ -39,8 +42,8 @@
 #define FOOTER_BAR_LINES 1
 // Empty row between detail metadata and the service table header.
 #define DETAIL_TABLE_GAP_LINES 1
-// Selected-service metadata rows shown above the detail table.
-#define DETAIL_SELECTED_SUMMARY_LINES 3
+// Selected-service metadata rows shown above the detail table, including a gap.
+#define DETAIL_SELECTED_SUMMARY_LINES 5
 // Main UI refresh cadence.
 #define REFRESH_INTERVAL_US 500000
 // Keyboard polling cadence. Lower than DVB refresh so navigation feels immediate.
@@ -549,6 +552,13 @@ static void format_ca_summary(const struct demux_service_snapshot *service, char
     snprintf(buffer, buffer_size, "free");
 }
 
+// Build a compact teletext/subtitle summary for the selected service.
+static void format_extra_summary(const struct demux_service_snapshot *service, char *buffer, size_t buffer_size) {
+  snprintf(buffer, buffer_size, "TTX %s | Sub %s",
+           service->teletext_len > 0 ? service->teletext : "-",
+           service->subtitle_len > 0 ? service->subtitles : "-");
+}
+
 // Print text without letting colored summary fields overflow the terminal row.
 static void add_detail_clipped_text(int col, const char *text) {
   int y, x;
@@ -675,6 +685,7 @@ static unsigned int render_selected_service_summary(const struct screen_state *s
   char service_type_text[16];
   char pcr_pid_text[16];
   char stream_summary[512];
+  char extra_summary[128];
   char ca_summary[256];
 
   format_service_type(service->service_type, service_type_text, sizeof(service_type_text));
@@ -685,7 +696,11 @@ static unsigned int render_selected_service_summary(const struct screen_state *s
     snprintf(pcr_pid_text, sizeof(pcr_pid_text), "-");
 
   format_stream_summary(service, stream_summary, sizeof(stream_summary));
+  format_extra_summary(service, extra_summary, sizeof(extra_summary));
   format_ca_summary(service, ca_summary, sizeof(ca_summary));
+
+  move(line++, 0);
+  full_line();
 
   move(line++, 0);
   add_detail_label(col, "Selected: ");
@@ -705,11 +720,19 @@ static unsigned int render_selected_service_summary(const struct screen_state *s
   add_detail_label(col, "Streams: ");
   add_detail_info_value(col, stream_summary);
   add_detail_clipped_text(col, " | ");
-  add_detail_label(col, "Lang: ");
+  add_detail_label(col, "Audio: ");
   if (service->languages_len > 0)
     add_detail_good_value(col, service->languages);
   else
     add_detail_clipped_text(col, "-");
+  full_line();
+
+  move(line++, 0);
+  add_detail_label(col, "Extra: ");
+  if (service->teletext_len > 0 || service->subtitle_len > 0)
+    add_detail_good_value(col, extra_summary);
+  else
+    add_detail_clipped_text(col, extra_summary);
   full_line();
 
   move(line++, 0);
@@ -777,7 +800,7 @@ static unsigned int render_service_table(struct screen_state *state, const struc
            "Type",
            "PMT PID",
            "Streams",
-           "Lang",
+           "Audio",
            "CA",
            "Status",
            "Service");

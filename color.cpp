@@ -1,3 +1,10 @@
+/*
+ * File role: ncurses color-pair initialization.
+ *
+ * Centralizes the terminal palette used by rendering macros so the rest of
+ * the UI can refer to semantic color helpers instead of raw pair numbers.
+ */
+
 #include <ncurses.h>
 
 // Map the classic terminal colors plus reverse-video status pairs to ncurses ids.

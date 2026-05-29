@@ -1,3 +1,10 @@
+/*
+ * File role: frontend status snapshot collector.
+ *
+ * Combines legacy DVB frontend ioctls with DVBv5 monitor data into one
+ * UI-facing snapshot, keeping legacy relative values for signal/CNR bars.
+ */
+
 #include "frontend_status.h"
 
 #include <string.h>

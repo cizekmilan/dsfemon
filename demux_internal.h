@@ -24,6 +24,8 @@ int si_read_sdt_service_name(struct dvb_data_s *dvb_data, int service_index, cha
 int pmt_pcr_pid(struct dvb_data_s *dvb_data, int program_pid);
 int pmt_stream_type(struct dvb_data_s *dvb_data, int program_pid, int stream_index);
 int pmt_read_audio_languages(struct dvb_data_s *dvb_data, int program_pid, char *languages, size_t languages_size);
+int pmt_read_teletext_languages(struct dvb_data_s *dvb_data, int program_pid, char *languages, size_t languages_size);
+int pmt_read_subtitle_languages(struct dvb_data_s *dvb_data, int program_pid, char *languages, size_t languages_size);
 int pmt_read_ca_details(struct dvb_data_s *dvb_data, int program_pid, char *ca_details, size_t ca_details_size);
 
 #endif

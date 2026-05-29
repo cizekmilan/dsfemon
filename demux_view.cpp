@@ -1,3 +1,10 @@
+/*
+ * File role: compact demux rendering for the main monitor page.
+ *
+ * Draws the network/service summary row and the selectable "See demux details"
+ * entry, including safe fitting/rotation of long service lists.
+ */
+
 #include "demux_view.h"
 
 #include <curses.h>

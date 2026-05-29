@@ -1,3 +1,10 @@
+/*
+ * File role: DVB device discovery and lifecycle management.
+ *
+ * Scans configured /dev/dvb adapter/frontend/demux paths, opens device file
+ * descriptors, starts demux readers, formats paths, and releases resources.
+ */
+
 #include "device_discovery.h"
 
 #include <fcntl.h>

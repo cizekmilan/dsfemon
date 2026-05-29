@@ -1,3 +1,10 @@
+/*
+ * File role: command-line parsing for dsfemon.
+ *
+ * Handles --help, --version, adapter selection, subadapter limits, parser
+ * errors, and the stable user-facing usage text before ncurses starts.
+ */
+
 #include "command_line.h"
 
 #include <errno.h>

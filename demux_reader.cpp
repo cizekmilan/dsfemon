@@ -1,3 +1,10 @@
+/*
+ * File role: background demux section reader.
+ *
+ * Reads PAT, PMT, NIT, and SDT sections from the Linux DVB demux device and
+ * stores raw, CRC-checked section bytes in the per-device PID cache.
+ */
+
 #include "demux_internal.h"
 
 #include <linux/dvb/dmx.h>

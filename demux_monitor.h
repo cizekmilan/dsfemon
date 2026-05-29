@@ -10,6 +10,8 @@
 #define DEMUX_PROVIDER_NAME_SIZE 100
 #define DEMUX_SERVICE_NAME_SIZE 100
 #define DEMUX_LANGUAGE_TEXT_SIZE 16
+#define DEMUX_TELETEXT_TEXT_SIZE 16
+#define DEMUX_SUBTITLE_TEXT_SIZE 16
 #define DEMUX_CA_DETAIL_TEXT_SIZE 160
 #define DEMUX_MAX_SERVICES 256
 #define DEMUX_MAX_SERVICE_STREAMS 16
@@ -51,11 +53,15 @@ struct demux_service_snapshot {
   int free_ca_mode;
   int provider_name_len;
   int languages_len;
+  int teletext_len;
+  int subtitle_len;
   int ca_detail_len;
   int name_len;
   struct demux_stream_snapshot streams[DEMUX_MAX_SERVICE_STREAMS];
   char provider_name[DEMUX_PROVIDER_NAME_SIZE];
   char languages[DEMUX_LANGUAGE_TEXT_SIZE];
+  char teletext[DEMUX_TELETEXT_TEXT_SIZE];
+  char subtitles[DEMUX_SUBTITLE_TEXT_SIZE];
   char ca_detail[DEMUX_CA_DETAIL_TEXT_SIZE];
   char name[DEMUX_SERVICE_NAME_SIZE];
 };

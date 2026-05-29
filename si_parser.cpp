@@ -1,3 +1,10 @@
+/*
+ * File role: byte-oriented PSI/SI parser.
+ *
+ * Parses PAT, PMT, NIT, and SDT cached sections without endian-dependent
+ * bitfields, extracting services, streams, languages, CA, teletext, and subtitles.
+ */
+
 #include "demux_internal.h"
 
 #include <ctype.h>
@@ -15,6 +22,8 @@
 #define MAX_VISIBLE_LANGUAGE_CODES 3
 #define MAX_CA_SUMMARY_VALUES 32
 #define MAX_VISIBLE_CA_SYSTEM_IDS 4
+#define TELETEXT_DESCRIPTOR_ENTRY_LEN 5
+#define SUBTITLE_DESCRIPTOR_ENTRY_LEN 8
 
 // Tiny local helper kept here to avoid pulling in C++ utility headers.
 static int min_int(int a, int b) {
@@ -514,7 +523,7 @@ int pmt_pcr_pid(struct dvb_data_s *dvb_data, int program_pid) {
 }
 
 // Collect unique ISO 639 language codes from PMT stream descriptors.
-int pmt_read_audio_languages(struct dvb_data_s *dvb_data, int program_pid, char *languages, size_t languages_size) {
+static int pmt_read_descriptor_languages(struct dvb_data_s *dvb_data, int program_pid, int descriptor_tag_filter, int descriptor_entry_len, char *languages, size_t languages_size) {
   char collected_languages[MAX_LANGUAGE_CODES][LANGUAGE_CODE_SIZE];
   int language_count = 0;
 
@@ -544,8 +553,8 @@ int pmt_read_audio_languages(struct dvb_data_s *dvb_data, int program_pid, char 
       if (descriptor_end > descriptors_end)
         break;
 
-      if (descriptor_tag == PMT_ISO_639_LANGUAGE_DESCRIPTOR) {
-        for (int language_pointer = descriptor_pointer + 2; language_pointer + 4 <= descriptor_end; language_pointer += 4) {
+      if (descriptor_tag == descriptor_tag_filter) {
+        for (int language_pointer = descriptor_pointer + 2; language_pointer + descriptor_entry_len <= descriptor_end; language_pointer += descriptor_entry_len) {
           char language[LANGUAGE_CODE_SIZE];
 
           format_iso639_language_code(&data[language_pointer], language, sizeof(language));
@@ -558,6 +567,21 @@ int pmt_read_audio_languages(struct dvb_data_s *dvb_data, int program_pid, char 
   }
 
   return format_language_summary(collected_languages, language_count, languages, languages_size);
+}
+
+// Collect unique ISO 639 language codes from PMT audio stream descriptors.
+int pmt_read_audio_languages(struct dvb_data_s *dvb_data, int program_pid, char *languages, size_t languages_size) {
+  return pmt_read_descriptor_languages(dvb_data, program_pid, PMT_ISO_639_LANGUAGE_DESCRIPTOR, 4, languages, languages_size);
+}
+
+// Collect unique teletext language codes from PMT stream descriptors.
+int pmt_read_teletext_languages(struct dvb_data_s *dvb_data, int program_pid, char *languages, size_t languages_size) {
+  return pmt_read_descriptor_languages(dvb_data, program_pid, PMT_TELETEXT_DESCRIPTOR, TELETEXT_DESCRIPTOR_ENTRY_LEN, languages, languages_size);
+}
+
+// Collect unique DVB subtitle language codes from PMT stream descriptors.
+int pmt_read_subtitle_languages(struct dvb_data_s *dvb_data, int program_pid, char *languages, size_t languages_size) {
+  return pmt_read_descriptor_languages(dvb_data, program_pid, PMT_SUBTITLING_DESCRIPTOR, SUBTITLE_DESCRIPTOR_ENTRY_LEN, languages, languages_size);
 }
 
 // Collect CA descriptors from PMT program and stream descriptor loops.

@@ -1,3 +1,10 @@
+/*
+ * File role: frontend status rendering.
+ *
+ * Draws each frontend block: device info, lock flags, signal/CNR bars,
+ * BER/block counters, and compact DVBv5 tuning parameters.
+ */
+
 #include "frontend_view.h"
 
 #include <curses.h>
