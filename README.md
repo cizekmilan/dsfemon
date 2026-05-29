@@ -145,8 +145,10 @@ The refresh interval controls both the ncurses redraw cadence and the background
 
 Special thanks to David Seidl, author of the original Femon DVB frontend monitor from 2012.
 
-This project is based on his original work and continues it as a modernized open-source version for current Linux DVB systems.
+This project is a modernized continuation of the original work, developed and published with the author's permission.
 
 ## License
 
-Permission was granted to continue and publish the project under the condition that open-source principles are preserved.
+The original author granted permission to continue, modify and publicly distribute the project, provided that it remains aligned with open-source principles.
+
+This continuation is distributed under the GNU GPL v3 license.
