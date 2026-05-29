@@ -29,7 +29,7 @@
 #include "frontend_view.h"
 #include "ui_helpers.h"
 
-#define DSFEMON_VERSION "v0.75"
+#define DSFEMON_VERSION "v0.78"
 #define DSFEMON_TITLE "dsfemon - DVB frontend monitor"
 // Number of monitor refreshes between automatic rotations of long service lists.
 #define CHANNEL_ROTATION_REFRESHES 8
@@ -462,12 +462,61 @@ static void render_header_bar(int header_row, int col, unsigned int current_page
 
 // Keep monitor keyboard help in one place so the spinner can avoid overlapping it.
 static const char *monitor_footer_help_text(void) {
-  return " Up/Down select | Enter detail | PgUp/PgDn page | Home/End jump | q quit ";
+  return " Up/Down select | Enter detail | PgUp/PgDn page | Home/End jump | Quit ";
 }
 
 // Keep detail keyboard help separate from the monitor navigation help.
 static const char *detail_footer_help_text(void) {
-  return " Up/Down service | PgUp/PgDn page | Home/End jump | Esc back | q quit ";
+  return " Up/Down service | PgUp/PgDn page | Home/End jump | ESC back | Quit ";
+}
+
+// Print one footer segment while respecting the terminal width.
+static void add_footer_text(int col, const char *text) {
+  int y, x;
+  getyx(stdscr, y, x);
+  (void)y;
+
+  int remaining_cols = col - x;
+  if (remaining_cols > 0)
+    addnstr(text, remaining_cols);
+}
+
+// Highlight a keyboard token inside the reverse-video footer bar.
+static void add_footer_key(int col, const char *text) {
+  REVERSE_RED_ON;
+  add_footer_text(col, text);
+  REVERSE_RED_OFF;
+}
+
+// Render colored keyboard help without changing the plain text layout length.
+static void render_footer_help_text(int col, bool detail_open) {
+  add_footer_text(col, " ");
+  add_footer_key(col, "Up");
+  add_footer_text(col, "/");
+  add_footer_key(col, "Down");
+  add_footer_text(col, detail_open ? " service | " : " select | ");
+
+  if (!detail_open) {
+    add_footer_key(col, "Enter");
+    add_footer_text(col, " detail | ");
+  }
+
+  add_footer_key(col, "PgUp");
+  add_footer_text(col, "/");
+  add_footer_key(col, "PgDn");
+  add_footer_text(col, " page | ");
+  add_footer_key(col, "Home");
+  add_footer_text(col, "/");
+  add_footer_key(col, "End");
+  add_footer_text(col, " jump | ");
+
+  if (detail_open) {
+    add_footer_key(col, "ESC");
+    add_footer_text(col, " back | ");
+  }
+
+  add_footer_key(col, "Q");
+  add_footer_text(col, "uit ");
 }
 
 // Return the right-aligned footer indicator column, or -1 when the row is tight.
@@ -485,15 +534,17 @@ static int footer_indicator_column(int col, const char *help_text) {
 }
 
 // Show compact bottom keyboard help plus a refresh spinner on the right.
-static void render_help_bar(int footer_row, int col, const char *help_text, unsigned int refresh_cycle) {
+static void render_help_bar(int footer_row, int col, bool detail_open, unsigned int refresh_cycle) {
   if (col <= 0)
     return;
 
   static const char spinner[] = "|/-\\";
+  const char *help_text = detail_open ? detail_footer_help_text() : monitor_footer_help_text();
 
   attron(A_REVERSE);
   mvhline(footer_row, 0, ' ', col);
-  mvaddnstr(footer_row, 0, help_text, col);
+  move(footer_row, 0);
+  render_footer_help_text(col, detail_open);
 
   int indicator_col = footer_indicator_column(col, help_text);
   if (indicator_col >= 0) {
@@ -585,7 +636,7 @@ static void render_screen(struct screen_state *state, struct dvb_data_s *dvb_dat
   }
 
   if (row > HEADER_BAR_LINES)
-    render_help_bar(footer_row, col, state->detail_open ? detail_footer_help_text() : monitor_footer_help_text(), state->refresh_cycle);
+    render_help_bar(footer_row, col, state->detail_open, state->refresh_cycle);
 
   refresh();
 }
