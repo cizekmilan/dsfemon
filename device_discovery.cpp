@@ -88,6 +88,7 @@ void init_dvb_devices(struct dvb_data_s *dvb_data, int device_count) {
     dvb_data[i].fefd = -1;
     dvb_data[i].defd = -1;
     dvb_data[i].pid_data = NULL;
+    dvb_data[i].sdt_cache = NULL;
     dvb_data[i].demux_thread_started = 0;
     dvb_data[i].stop_demux_thread = 0;
     pthread_mutex_init(&dvb_data[i].data_lock, NULL);
@@ -125,7 +126,12 @@ int discover_dvb_devices(struct dvb_data_s *dvb_data, int device_count, const st
 
       if (device->defd >= 0) {
         device->pid_data = (pid_data_s *)calloc(TS_PID_COUNT, sizeof(*device->pid_data));
-        if (device->pid_data == NULL) {
+        device->sdt_cache = (sdt_section_cache_s *)calloc(1, sizeof(*device->sdt_cache));
+        if (device->pid_data == NULL || device->sdt_cache == NULL) {
+          free(device->pid_data);
+          free(device->sdt_cache);
+          device->pid_data = NULL;
+          device->sdt_cache = NULL;
           close(device->defd);
           device->defd = -1;
 
@@ -134,7 +140,9 @@ int discover_dvb_devices(struct dvb_data_s *dvb_data, int device_count, const st
 
         if (start_dvb_reader(device) != 0) {
           free(device->pid_data);
+          free(device->sdt_cache);
           device->pid_data = NULL;
+          device->sdt_cache = NULL;
           close(device->defd);
           device->defd = -1;
         }
@@ -165,7 +173,9 @@ void cleanup_dvb_devices(struct dvb_data_s *dvb_data, int device_count) {
     }
 
     free(dvb_data[i].pid_data);
+    free(dvb_data[i].sdt_cache);
     dvb_data[i].pid_data = NULL;
+    dvb_data[i].sdt_cache = NULL;
     pthread_mutex_destroy(&dvb_data[i].data_lock);
   }
 }

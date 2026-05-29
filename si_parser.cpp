@@ -20,6 +20,7 @@
 #define LANGUAGE_CODE_SIZE 4
 #define MAX_LANGUAGE_CODES 16
 #define MAX_VISIBLE_LANGUAGE_CODES 3
+#define MAX_VISIBLE_LANGUAGE_CODES_WITH_OVERFLOW 2
 #define MAX_CA_SUMMARY_VALUES 32
 #define MAX_VISIBLE_CA_SYSTEM_IDS 4
 #define TELETEXT_DESCRIPTOR_ENTRY_LEN 5
@@ -51,11 +52,11 @@ static int psi_section_length(const unsigned char *data) {
 }
 
 // Return the usable PSI payload end offset, excluding the trailing CRC32.
-static int psi_payload_end(struct dvb_data_s *dvb_data, int pid, unsigned int header_len) {
-  if (!demux_has_pid_data(dvb_data, pid, header_len))
+static int psi_payload_end_for_section(const unsigned char *data, unsigned int len, unsigned int header_len) {
+  if (data == NULL || len < header_len)
     return 0;
 
-  int section_length = psi_section_length(dvb_data->pid_data[pid].data);
+  int section_length = psi_section_length(data);
   if (section_length < 4)
     return 0;
 
@@ -63,7 +64,15 @@ static int psi_payload_end(struct dvb_data_s *dvb_data, int pid, unsigned int he
   if (end < (int)header_len)
     return 0;
 
-  return min_int(end, dvb_data->pid_data[pid].len);
+  return min_int(end, len);
+}
+
+// Return the usable PSI payload end offset for one cached PID section.
+static int psi_payload_end(struct dvb_data_s *dvb_data, int pid, unsigned int header_len) {
+  if (!demux_has_pid_data(dvb_data, pid, header_len))
+    return 0;
+
+  return psi_payload_end_for_section(dvb_data->pid_data[pid].data, dvb_data->pid_data[pid].len, header_len);
 }
 
 // Locate one PAT program entry. Each entry maps a program number to PMT/NIT PID.
@@ -151,64 +160,120 @@ static bool find_pmt_stream_descriptors(struct dvb_data_s *dvb_data, int program
   return true;
 }
 
+struct sdt_part_location {
+  const unsigned char *data;
+  int part_pointer;
+  int descriptor_loop_end;
+};
+
+struct sdt_descriptor_location {
+  const unsigned char *data;
+  int descriptor_pointer;
+  int descriptor_end;
+};
+
 // Return the end offset of usable SDT service entries, excluding the PSI CRC.
-static int sdt_services_end(struct dvb_data_s *dvb_data) {
-  return psi_payload_end(dvb_data, SDT_PID, SDT_SECT_HEADER_LEN);
+static int sdt_services_end(const unsigned char *data, unsigned int len) {
+  return psi_payload_end_for_section(data, len, SDT_SECT_HEADER_LEN);
 }
 
-// Locate one SDT service entry and optionally return its descriptor loop end.
-static bool find_sdt_part(struct dvb_data_s *dvb_data, int section_number_i, int *part_pointer, int *descriptor_loop_end) {
-  if (section_number_i < 0 || !demux_has_pid_data(dvb_data, SDT_PID, SDT_SECT_HEADER_LEN))
-    return false;
-
-  const unsigned char *data = dvb_data->pid_data[SDT_PID].data;
-  int section_number = 0;
+// Count service entries inside one SDT section.
+static int count_sdt_services_in_section(const unsigned char *data, unsigned int len) {
+  int service_count = 0;
   int pointer = SDT_SECT_HEADER_LEN;
-  int limit = sdt_services_end(dvb_data);
+  int limit = sdt_services_end(data, len);
 
   while (pointer + SDT_PART_SECT_LEN <= limit) {
     int current_loop_end = pointer + SDT_PART_SECT_LEN + read_12_bit_length(data, pointer + 3);
     if (current_loop_end > limit)
       break;
 
-    if (section_number_i == section_number) {
-      if (part_pointer != NULL)
-        *part_pointer = pointer;
-      if (descriptor_loop_end != NULL)
-        *descriptor_loop_end = current_loop_end;
+    service_count++;
+    pointer = current_loop_end;
+  }
+
+  return service_count;
+}
+
+// Locate one service entry while walking an SDT section.
+static bool find_sdt_part_in_section(const unsigned char *data, unsigned int len, int service_index, int *current_index, struct sdt_part_location *location) {
+  int pointer = SDT_SECT_HEADER_LEN;
+  int limit = sdt_services_end(data, len);
+
+  while (pointer + SDT_PART_SECT_LEN <= limit) {
+    int current_loop_end = pointer + SDT_PART_SECT_LEN + read_12_bit_length(data, pointer + 3);
+    if (current_loop_end > limit)
+      break;
+
+    if (*current_index == service_index) {
+      if (location != NULL) {
+        location->data = data;
+        location->part_pointer = pointer;
+        location->descriptor_loop_end = current_loop_end;
+      }
+
       return true;
     }
 
-    section_number++;
+    (*current_index)++;
     pointer = current_loop_end;
   }
 
   return false;
 }
 
-// Locate the standard SDT service descriptor for one service entry.
-static bool find_sdt_service_descriptor(struct dvb_data_s *dvb_data, int service_index, int *descriptor_pointer, int *descriptor_end) {
-  int part_pointer;
-  int descriptor_loop_end;
-
-  if (!find_sdt_part(dvb_data, service_index, &part_pointer, &descriptor_loop_end))
+// Locate one SDT service entry across all cached SDT sections.
+static bool find_sdt_part(struct dvb_data_s *dvb_data, int service_index, struct sdt_part_location *location) {
+  if (dvb_data == NULL || service_index < 0)
     return false;
 
-  int pointer = part_pointer + SDT_PART_SECT_LEN;
+  int current_index = 0;
+  struct sdt_section_cache_s *cache = dvb_data->sdt_cache;
 
-  while (pointer + 2 <= descriptor_loop_end) {
-    int current_descriptor_tag = dvb_data->pid_data[SDT_PID].data[pointer];
-    int current_descriptor_length = dvb_data->pid_data[SDT_PID].data[pointer + 1];
+  if (cache != NULL && cache->initialized && !cache->complete)
+    return false;
+
+  if (cache != NULL && cache->initialized) {
+    for (int section_number = 0; section_number <= cache->last_section_number; section_number++) {
+      struct demux_section_s *section = &cache->sections[section_number];
+      if (section->len < SDT_SECT_HEADER_LEN)
+        continue;
+
+      if (find_sdt_part_in_section(section->data, section->len, service_index, &current_index, location))
+        return true;
+    }
+
+    return false;
+  }
+
+  if (!demux_has_pid_data(dvb_data, SDT_PID, SDT_SECT_HEADER_LEN))
+    return false;
+
+  return find_sdt_part_in_section(dvb_data->pid_data[SDT_PID].data, dvb_data->pid_data[SDT_PID].len, service_index, &current_index, location);
+}
+
+// Locate the standard SDT service descriptor for one service entry.
+static bool find_sdt_service_descriptor(struct dvb_data_s *dvb_data, int service_index, struct sdt_descriptor_location *location) {
+  struct sdt_part_location part_location;
+
+  if (!find_sdt_part(dvb_data, service_index, &part_location))
+    return false;
+
+  int pointer = part_location.part_pointer + SDT_PART_SECT_LEN;
+
+  while (pointer + 2 <= part_location.descriptor_loop_end) {
+    int current_descriptor_tag = part_location.data[pointer];
+    int current_descriptor_length = part_location.data[pointer + 1];
     int current_descriptor_end = pointer + 2 + current_descriptor_length;
-    if (current_descriptor_end > descriptor_loop_end)
+    if (current_descriptor_end > part_location.descriptor_loop_end)
       return false;
 
     if (current_descriptor_tag == SERVICE_DESCRIPTOR) {
-      if (descriptor_pointer != NULL)
-        *descriptor_pointer = pointer;
-
-      if (descriptor_end != NULL)
-        *descriptor_end = current_descriptor_end;
+      if (location != NULL) {
+        location->data = part_location.data;
+        location->descriptor_pointer = pointer;
+        location->descriptor_end = current_descriptor_end;
+      }
 
       return true;
     }
@@ -338,11 +403,14 @@ static int ordered_language_count(char ordered_languages[][LANGUAGE_CODE_SIZE], 
   return ordered_count;
 }
 
-// Format at most three language tokens and append a compact +N overflow marker.
+// Format language tokens compactly; avoid a +1 suffix because one language code
+// is just as short and more useful.
 static int format_language_summary(char languages[][LANGUAGE_CODE_SIZE], int language_count, char *buffer, size_t buffer_size) {
   char ordered_languages[MAX_LANGUAGE_CODES][LANGUAGE_CODE_SIZE];
   int ordered_count = ordered_language_count(ordered_languages, MAX_LANGUAGE_CODES, languages, language_count);
-  int visible_count = ordered_count > MAX_VISIBLE_LANGUAGE_CODES ? MAX_VISIBLE_LANGUAGE_CODES : ordered_count;
+  int visible_count = ordered_count;
+  if (ordered_count > MAX_VISIBLE_LANGUAGE_CODES)
+    visible_count = MAX_VISIBLE_LANGUAGE_CODES_WITH_OVERFLOW;
 
   if (buffer_size == 0)
     return 0;
@@ -694,117 +762,121 @@ int si_read_nit_network_name(struct dvb_data_s *dvb_data, int program_pid, char 
 
 // Count SDT service entries available in the cached SDT section.
 int si_count_sdt_services(struct dvb_data_s *dvb_data) {
-  if (!demux_has_pid_data(dvb_data, SDT_PID, SDT_SECT_HEADER_LEN))
+  if (dvb_data == NULL)
     return 0;
-  const unsigned char *data = dvb_data->pid_data[SDT_PID].data;
 
-  int section_number = 0;
+  struct sdt_section_cache_s *cache = dvb_data->sdt_cache;
+  if (cache != NULL && cache->initialized && !cache->complete)
+    return 0;
 
-  int pointer = SDT_SECT_HEADER_LEN;
-  int limit = sdt_services_end(dvb_data);
+  if (cache != NULL && cache->initialized) {
+    int service_count = 0;
 
-  while (pointer + SDT_PART_SECT_LEN <= limit) {
-    int descriptor_loop_end = pointer + SDT_PART_SECT_LEN + read_12_bit_length(data, pointer + 3);
-    if (descriptor_loop_end > limit)
-      break;
-    section_number++;
-    pointer = descriptor_loop_end;
+    for (int section_number = 0; section_number <= cache->last_section_number; section_number++) {
+      struct demux_section_s *section = &cache->sections[section_number];
+      if (section->len < SDT_SECT_HEADER_LEN)
+        continue;
+
+      service_count += count_sdt_services_in_section(section->data, section->len);
+    }
+
+    return service_count;
   }
 
-  return section_number;
+  if (!demux_has_pid_data(dvb_data, SDT_PID, SDT_SECT_HEADER_LEN))
+    return 0;
+
+  return count_sdt_services_in_section(dvb_data->pid_data[SDT_PID].data, dvb_data->pid_data[SDT_PID].len);
 }
 
 // Return the service_id for one SDT service entry.
 int si_sdt_service_id(struct dvb_data_s *dvb_data, int service_index) {
-  int pointer;
+  struct sdt_part_location location;
 
-  if (!find_sdt_part(dvb_data, service_index, &pointer, NULL))
+  if (!find_sdt_part(dvb_data, service_index, &location))
     return -1;
 
-  return read_u16_be(dvb_data->pid_data[SDT_PID].data, pointer);
+  return read_u16_be(location.data, location.part_pointer);
 }
 
 // Return the running_status flag for one SDT service entry.
 int si_sdt_service_running_status(struct dvb_data_s *dvb_data, int service_index) {
-  int pointer;
+  struct sdt_part_location location;
 
-  if (!find_sdt_part(dvb_data, service_index, &pointer, NULL))
+  if (!find_sdt_part(dvb_data, service_index, &location))
     return -1;
 
-  return (dvb_data->pid_data[SDT_PID].data[pointer + 3] >> 5) & 0x07;
+  return (location.data[location.part_pointer + 3] >> 5) & 0x07;
 }
 
 // Return the free_CA_mode flag for one SDT service entry.
 int si_sdt_service_free_ca_mode(struct dvb_data_s *dvb_data, int service_index) {
-  int pointer;
+  struct sdt_part_location location;
 
-  if (!find_sdt_part(dvb_data, service_index, &pointer, NULL))
+  if (!find_sdt_part(dvb_data, service_index, &location))
     return -1;
 
-  return (dvb_data->pid_data[SDT_PID].data[pointer + 3] >> 4) & 0x01;
+  return (location.data[location.part_pointer + 3] >> 4) & 0x01;
 }
 
 // Return the service_type from the SDT service descriptor.
 int si_sdt_service_type(struct dvb_data_s *dvb_data, int service_index) {
-  int descriptor_pointer;
-  int descriptor_end;
+  struct sdt_descriptor_location location;
 
-  if (!find_sdt_service_descriptor(dvb_data, service_index, &descriptor_pointer, &descriptor_end))
+  if (!find_sdt_service_descriptor(dvb_data, service_index, &location))
     return -1;
 
-  if (descriptor_pointer + 2 >= descriptor_end)
+  if (location.descriptor_pointer + 2 >= location.descriptor_end)
     return -1;
 
-  return dvb_data->pid_data[SDT_PID].data[descriptor_pointer + 2];
+  return location.data[location.descriptor_pointer + 2];
 }
 
 // Extract the service provider name from one SDT service descriptor.
 int si_read_sdt_service_provider_name(struct dvb_data_s *dvb_data, int service_index, char *provider_name) {
-  int descriptor_pointer;
-  int descriptor_end;
+  struct sdt_descriptor_location location;
 
-  if (!find_sdt_service_descriptor(dvb_data, service_index, &descriptor_pointer, &descriptor_end))
+  if (!find_sdt_service_descriptor(dvb_data, service_index, &location))
     return 0;
 
-  int provider_name_length_pos = descriptor_pointer + 3;
-  if (provider_name_length_pos >= descriptor_end)
+  int provider_name_length_pos = location.descriptor_pointer + 3;
+  if (provider_name_length_pos >= location.descriptor_end)
     return 0;
 
-  int provider_name_length = dvb_data->pid_data[SDT_PID].data[provider_name_length_pos];
-  if (provider_name_length_pos + 1 + provider_name_length > descriptor_end)
+  int provider_name_length = location.data[provider_name_length_pos];
+  if (provider_name_length_pos + 1 + provider_name_length > location.descriptor_end)
     return 0;
 
   if (provider_name_length > DEMUX_PROVIDER_NAME_SIZE - 1)
     provider_name_length = DEMUX_PROVIDER_NAME_SIZE - 1;
-  memcpy(provider_name, &dvb_data->pid_data[SDT_PID].data[provider_name_length_pos + 1], provider_name_length);
+  memcpy(provider_name, &location.data[provider_name_length_pos + 1], provider_name_length);
 
   return provider_name_length;
 }
 
 // Extract the service descriptor name for one SDT service entry.
 int si_read_sdt_service_name(struct dvb_data_s *dvb_data, int service_index, char *service_name) {
-  int descriptor_pointer;
-  int descriptor_end;
+  struct sdt_descriptor_location location;
 
-  if (!find_sdt_service_descriptor(dvb_data, service_index, &descriptor_pointer, &descriptor_end))
+  if (!find_sdt_service_descriptor(dvb_data, service_index, &location))
     return 0;
 
-  int provider_name_length_pos = descriptor_pointer + 3;
-  if (provider_name_length_pos >= descriptor_end)
+  int provider_name_length_pos = location.descriptor_pointer + 3;
+  if (provider_name_length_pos >= location.descriptor_end)
     return 0;
 
-  int service_provider_name_length = dvb_data->pid_data[SDT_PID].data[provider_name_length_pos];
+  int service_provider_name_length = location.data[provider_name_length_pos];
   int service_name_length_pos = provider_name_length_pos + 1 + service_provider_name_length;
-  if (service_name_length_pos >= descriptor_end)
+  if (service_name_length_pos >= location.descriptor_end)
     return 0;
 
-  int service_name_length = dvb_data->pid_data[SDT_PID].data[service_name_length_pos];
-  if (service_name_length_pos + 1 + service_name_length > descriptor_end)
+  int service_name_length = location.data[service_name_length_pos];
+  if (service_name_length_pos + 1 + service_name_length > location.descriptor_end)
     return 0;
 
   if (service_name_length > DEMUX_SERVICE_NAME_SIZE - 1)
     service_name_length = DEMUX_SERVICE_NAME_SIZE - 1;
-  memcpy(service_name, &dvb_data->pid_data[SDT_PID].data[service_name_length_pos + 1], service_name_length);
+  memcpy(service_name, &location.data[service_name_length_pos + 1], service_name_length);
 
   return service_name_length;
 }
