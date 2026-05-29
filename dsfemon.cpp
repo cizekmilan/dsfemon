@@ -425,6 +425,15 @@ static void format_service_type(int service_type, char *buffer, size_t buffer_si
     case 0x03:
       snprintf(buffer, buffer_size, "Text");
       break;
+    case 0x07:
+      snprintf(buffer, buffer_size, "FM Rad");
+      break;
+    case 0x0a:
+      snprintf(buffer, buffer_size, "AAC Rad");
+      break;
+    case 0x0b:
+      snprintf(buffer, buffer_size, "Mosaic");
+      break;
     case 0x0c:
       snprintf(buffer, buffer_size, "Data");
       break;
