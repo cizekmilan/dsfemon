@@ -330,6 +330,86 @@ static void append_stream_summary_more(char *buffer, size_t buffer_size, size_t 
   append_stream_summary_text(buffer, buffer_size, used, more_text);
 }
 
+// Append part of a CA summary while preserving a valid C string.
+static bool append_ca_summary_text(char *buffer, size_t buffer_size, size_t *used, const char *text, size_t text_len) {
+  if (buffer_size == 0 || used == NULL)
+    return false;
+
+  if (*used >= buffer_size - 1)
+    return false;
+
+  size_t available = buffer_size - *used - 1;
+  size_t copy_len = text_len < available ? text_len : available;
+
+  memcpy(buffer + *used, text, copy_len);
+  *used += copy_len;
+  buffer[*used] = '\0';
+
+  return copy_len == text_len;
+}
+
+// Append text to a CA summary only when it still fits the visible row budget.
+static bool append_ca_summary_visible(char *buffer, size_t buffer_size, size_t *used, const char *text, size_t max_text_width) {
+  size_t text_len = strlen(text);
+
+  if (max_text_width > 0 && *used + text_len > max_text_width)
+    return false;
+
+  return append_ca_summary_text(buffer, buffer_size, used, text, text_len);
+}
+
+// Shorten CA systems only when the complete detail would overflow the terminal.
+static void format_ca_detail_to_width(const char *ca_detail, char *buffer, size_t buffer_size, size_t max_text_width) {
+  const char *pid_suffix = strstr(ca_detail, " | ");
+  const char *systems_end = pid_suffix != NULL ? pid_suffix : ca_detail + strlen(ca_detail);
+  const char *suffix = pid_suffix != NULL ? pid_suffix : "";
+  const char *system_start = ca_detail;
+  size_t used = 0;
+  bool truncated = false;
+
+  if (max_text_width == 0 || strlen(ca_detail) <= max_text_width) {
+    snprintf(buffer, buffer_size, "%s", ca_detail);
+
+    return;
+  }
+
+  buffer[0] = '\0';
+
+  while (system_start < systems_end) {
+    const char *system_end = system_start;
+
+    while (system_end < systems_end && *system_end != ',')
+      system_end++;
+
+    size_t system_len = system_end - system_start;
+    const char *separator = used > 0 ? "," : "";
+    bool has_more_systems = system_end < systems_end;
+    size_t required_width = used + strlen(separator) + system_len + strlen(has_more_systems ? ", ..." : "");
+
+    if (max_text_width > 0 && required_width > max_text_width) {
+      truncated = true;
+      break;
+    }
+
+    append_ca_summary_visible(buffer, buffer_size, &used, separator, max_text_width);
+    append_ca_summary_text(buffer, buffer_size, &used, system_start, system_len);
+
+    if (!has_more_systems)
+      break;
+
+    system_start = system_end + 1;
+  }
+
+  if (truncated) {
+    const char *ellipsis = used > 0 ? ", ..." : "...";
+
+    append_ca_summary_visible(buffer, buffer_size, &used, ellipsis, max_text_width);
+  }
+
+  // PID count is helpful, but visible CA system IDs have higher priority on tight rows.
+  append_ca_summary_visible(buffer, buffer_size, &used, suffix, max_text_width);
+}
+
 // Build a compact PMT stream list for the selected service.
 static void format_stream_summary(const struct demux_service_snapshot *service, char *buffer, size_t buffer_size, size_t max_text_width) {
   size_t used = 0;
@@ -373,9 +453,9 @@ static void format_stream_summary(const struct demux_service_snapshot *service, 
 }
 
 // Build a compact conditional-access summary for the selected service.
-static void format_ca_summary(const struct demux_service_snapshot *service, char *buffer, size_t buffer_size) {
+static void format_ca_summary(const struct demux_service_snapshot *service, char *buffer, size_t buffer_size, size_t max_text_width) {
   if (service->ca_detail_len > 0)
-    snprintf(buffer, buffer_size, "%s", service->ca_detail);
+    format_ca_detail_to_width(service->ca_detail, buffer, buffer_size, max_text_width);
   else if (service->free_ca_mode)
     snprintf(buffer, buffer_size, "yes, details unavailable");
   else
@@ -523,8 +603,9 @@ static unsigned int render_selected_service_summary(const struct demux_detail_st
   char pcr_pid_text[16];
   char stream_summary[512];
   char extra_summary[128];
-  char ca_summary[256];
+  char ca_summary[DEMUX_CA_DETAIL_TEXT_SIZE];
   size_t stream_summary_width = detail_value_width(col, "Streams: ");
+  size_t ca_summary_width = detail_value_width(col, "CA: ");
 
   format_service_type(service->service_type, service_type_text, sizeof(service_type_text));
 
@@ -535,7 +616,7 @@ static unsigned int render_selected_service_summary(const struct demux_detail_st
 
   format_stream_summary(service, stream_summary, sizeof(stream_summary), stream_summary_width);
   format_extra_summary(service, extra_summary, sizeof(extra_summary));
-  format_ca_summary(service, ca_summary, sizeof(ca_summary));
+  format_ca_summary(service, ca_summary, sizeof(ca_summary), ca_summary_width);
 
   move(line++, 0);
   full_line();

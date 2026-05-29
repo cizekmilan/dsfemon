@@ -22,7 +22,6 @@
 #define MAX_VISIBLE_LANGUAGE_CODES 3
 #define MAX_VISIBLE_LANGUAGE_CODES_WITH_OVERFLOW 2
 #define MAX_CA_SUMMARY_VALUES 32
-#define MAX_VISIBLE_CA_SYSTEM_IDS 4
 #define TELETEXT_DESCRIPTOR_ENTRY_LEN 5
 #define SUBTITLE_DESCRIPTOR_ENTRY_LEN 8
 
@@ -471,23 +470,19 @@ static void append_summary_text(char *buffer, size_t buffer_size, size_t *used, 
 // Format CA details as systems plus PID count, keeping long descriptors readable.
 static int format_ca_details(int *ca_system_ids, int ca_system_count, int ca_pid_count, char *buffer, size_t buffer_size) {
   size_t used = 0;
-  int visible_system_count = ca_system_count > MAX_VISIBLE_CA_SYSTEM_IDS ? MAX_VISIBLE_CA_SYSTEM_IDS : ca_system_count;
 
   if (buffer_size == 0)
     return 0;
 
   buffer[0] = '\0';
 
-  for (int i = 0; i < visible_system_count; i++) {
+  for (int i = 0; i < ca_system_count; i++) {
     char system_text[16];
 
     snprintf(system_text, sizeof(system_text), "0x%04x", ca_system_ids[i]);
     append_summary_text(buffer, buffer_size, &used, i > 0 ? "," : "");
     append_summary_text(buffer, buffer_size, &used, system_text);
   }
-
-  if (ca_system_count > visible_system_count)
-    append_summary_text(buffer, buffer_size, &used, ", ...");
 
   if (ca_pid_count > 0) {
     char pid_text[24];
