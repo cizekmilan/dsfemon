@@ -467,7 +467,7 @@ static void append_summary_text(char *buffer, size_t buffer_size, size_t *used, 
     *used += written;
 }
 
-// Format CA details as systems plus PID count, keeping long descriptors readable.
+// Format CA details as unique CA systems plus unique CA/ECM PID count.
 static int format_ca_details(int *ca_system_ids, int ca_system_count, int ca_pid_count, char *buffer, size_t buffer_size) {
   size_t used = 0;
 
@@ -487,7 +487,7 @@ static int format_ca_details(int *ca_system_ids, int ca_system_count, int ca_pid
   if (ca_pid_count > 0) {
     char pid_text[24];
 
-    snprintf(pid_text, sizeof(pid_text), " | %d PIDs", ca_pid_count);
+    snprintf(pid_text, sizeof(pid_text), " | %d CA PIDs", ca_pid_count);
     append_summary_text(buffer, buffer_size, &used, pid_text);
   }
 
