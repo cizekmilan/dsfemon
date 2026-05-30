@@ -12,6 +12,13 @@
 #include "color.h"
 #include "demux_monitor.h"
 
+// Compute the printed width of one service item, including the first-list marker.
+static int channel_name_width(int len, bool printed_service) {
+  int prefix_len = printed_service ? 0 : 5;
+
+  return prefix_len + len + 1;
+}
+
 // Print one service name and its trailing separator when it fits on the row.
 static bool print_channel_name_if_fits(const char *service_name, int len, bool *printed_service) {
   int y, x;
@@ -21,8 +28,7 @@ static bool print_channel_name_if_fits(const char *service_name, int len, bool *
   (void)y;
   (void)row;
 
-  int prefix_len = *printed_service ? 0 : 5;
-  int needed_len = prefix_len + len + 1;
+  int needed_len = channel_name_width(len, *printed_service);
   if (x + needed_len > col)
     return false;
 
@@ -64,7 +70,59 @@ static bool channel_list_fits_row(const struct demux_snapshot *snapshot) {
   return required_len == 0 || x + required_len <= col;
 }
 
-// Render the current network name and the visible slice of its service list.
+// Estimate how many services fit into one row-filling slice from a start index.
+static int channel_list_slice_capacity(const struct demux_snapshot *snapshot, int start_service) {
+  int y, x;
+  int row, col;
+  getyx(stdscr, y, x);
+  getmaxyx(stdscr, row, col);
+  (void)y;
+  (void)row;
+
+  bool counted_service = false;
+  int current_x = x;
+  int visible_count = 0;
+
+  for (int offset = 0; offset < snapshot->service_count; offset++) {
+    int service_index = (start_service + offset) % snapshot->service_count;
+    int len = snapshot->services[service_index].name_len;
+    if (len <= 0)
+      continue;
+
+    int needed_len = channel_name_width(len, counted_service);
+    if (current_x + needed_len > col) {
+      if (counted_service)
+        break;
+
+      continue;
+    }
+
+    current_x += needed_len;
+    counted_service = true;
+    visible_count++;
+  }
+
+  return visible_count > 0 ? visible_count : 1;
+}
+
+// Render one row-filling circular slice of the service list.
+static void render_channel_list_slice(const struct demux_snapshot *snapshot, int start_service) {
+  bool printed_service = false;
+
+  WHITE_ON;
+  for (int offset = 0; offset < snapshot->service_count; offset++) {
+    int service_index = (start_service + offset) % snapshot->service_count;
+    const struct demux_service_snapshot *service = &snapshot->services[service_index];
+    if (service->name_len <= 0)
+      continue;
+
+    if (!print_channel_name_if_fits(service->name, service->name_len, &printed_service) && printed_service)
+      break;
+  }
+  WHITE_OFF;
+}
+
+// Render the current network name and the visible circular slice of its service list.
 int demux_main_info(struct dvb_data_s *dvb_data, unsigned int channel_offset_seed) {
   int row, col;
   getmaxyx(stdscr, row, col);
@@ -80,20 +138,14 @@ int demux_main_info(struct dvb_data_s *dvb_data, unsigned int channel_offset_see
     printw("%s", snapshot.network_name);
   BLUE_BOLD_OFF;
 
-  int start_section = 0;
-  if (snapshot.service_count > 0 && !channel_list_fits_row(&snapshot))
-    start_section = channel_offset_seed % snapshot.service_count;
-  bool printed_service = false;
-  WHITE_ON;
-
-  for (int service_index = start_section; service_index < snapshot.service_count; service_index++) {
-    const struct demux_service_snapshot *service = &snapshot.services[service_index];
-    if (service->name_len <= 0)
-      continue;
-    if (!print_channel_name_if_fits(service->name, service->name_len, &printed_service) && printed_service)
-      break;
+  int start_service = 0;
+  if (snapshot.service_count > 0 && !channel_list_fits_row(&snapshot)) {
+    int slice_capacity = channel_list_slice_capacity(&snapshot, 0);
+    start_service = (channel_offset_seed * slice_capacity) % snapshot.service_count;
   }
-  WHITE_OFF;
+
+  if (snapshot.service_count > 0)
+    render_channel_list_slice(&snapshot, start_service);
 
   hline(' ', col);
 
